@@ -1,0 +1,13 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.ipynb_checkpoints/
+
+# Runtime / generated
+logs/
+experiments/
+cache/

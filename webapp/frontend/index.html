@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TAREEK-Web</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- App CSS -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+
+  <!-- ======== Header ======== -->
+  <header class="app-header">
+    <div class="app-header__logo">
+
+      <svg width="80" height="80" viewBox="0 0 80 88" xmlns="http://www.w3.org/2000/svg">
+        <!-- Circular background -->
+        <circle cx="40" cy="40" r="38" fill="#2a2a2a"
+          style="fill:rgb(42, 42, 42);stroke:none;color:rgb(255, 255, 255);stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+
+        <!-- Road trapezoid (left to right, vanishing on right) -->
+        <polygon points="8,22 8,58 72,52 72,28" fill="#444"
+          style="fill:rgb(68, 68, 68);stroke:none;color:rgb(255, 255, 255);stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+
+        <!-- Top curb -->
+        <line x1="8" y1="22" x2="72" y2="28" stroke="#9a8f82" stroke-width="1.2" stroke-linecap="round"
+          style="fill:rgb(0, 0, 0);stroke:rgb(154, 143, 130);color:rgb(255, 255, 255);stroke-width:1.2px;stroke-linecap:round;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+        <!-- Bottom curb -->
+        <line x1="8" y1="58" x2="72" y2="52" stroke="#9a8f82" stroke-width="1.2" stroke-linecap="round"
+          style="fill:rgb(0, 0, 0);stroke:rgb(154, 143, 130);color:rgb(255, 255, 255);stroke-width:1.2px;stroke-linecap:round;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+
+        <!-- Top solid white lane line -->
+        <line x1="8" y1="25" x2="72" y2="30" stroke="#f0ece4" stroke-width="1.5" stroke-linecap="round" opacity="0.9"
+          style="fill:rgb(0, 0, 0);stroke:rgb(240, 236, 228);color:rgb(255, 255, 255);stroke-width:1.5px;stroke-linecap:round;stroke-linejoin:miter;opacity:0.9;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+        <!-- Bottom solid white lane line -->
+        <line x1="8" y1="55" x2="72" y2="50" stroke="#f0ece4" stroke-width="1.5" stroke-linecap="round" opacity="0.9"
+          style="fill:rgb(0, 0, 0);stroke:rgb(240, 236, 228);color:rgb(255, 255, 255);stroke-width:1.5px;stroke-linecap:round;stroke-linejoin:miter;opacity:0.9;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+
+        <!-- Center dashed yellow line (perspective, dashes shrink toward right) -->
+        <line x1="8" y1="40" x2="20" y2="40" stroke="#f5e44a" stroke-width="2.2" stroke-linecap="round"
+          style="fill:rgb(0, 0, 0);stroke:rgb(245, 228, 74);color:rgb(255, 255, 255);stroke-width:2.2px;stroke-linecap:round;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+        <line x1="24" y1="40" x2="33" y2="40" stroke="#f5e44a" stroke-width="1.8" stroke-linecap="round"
+          style="fill:rgb(0, 0, 0);stroke:rgb(245, 228, 74);color:rgb(255, 255, 255);stroke-width:1.8px;stroke-linecap:round;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+        <line x1="36" y1="40" x2="43" y2="40" stroke="#f5e44a" stroke-width="1.4" stroke-linecap="round"
+          style="fill:rgb(0, 0, 0);stroke:rgb(245, 228, 74);color:rgb(255, 255, 255);stroke-width:1.4px;stroke-linecap:round;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+        <line x1="46" y1="40" x2="51" y2="40" stroke="#f5e44a" stroke-width="1.1" stroke-linecap="round"
+          style="fill:rgb(0, 0, 0);stroke:rgb(245, 228, 74);color:rgb(255, 255, 255);stroke-width:1.1px;stroke-linecap:round;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+        <line x1="53" y1="40" x2="57" y2="40" stroke="#f5e44a" stroke-width="0.9" stroke-linecap="round"
+          style="fill:rgb(0, 0, 0);stroke:rgb(245, 228, 74);color:rgb(255, 255, 255);stroke-width:0.9px;stroke-linecap:round;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+        <line x1="59" y1="40" x2="62" y2="40" stroke="#f5e44a" stroke-width="0.7" stroke-linecap="round"
+          style="fill:rgb(0, 0, 0);stroke:rgb(245, 228, 74);color:rgb(255, 255, 255);stroke-width:0.7px;stroke-linecap:round;stroke-linejoin:miter;opacity:1;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+        <line x1="63" y1="40" x2="65" y2="40" stroke="#f5e44a" stroke-width="0.5" stroke-linecap="round" opacity="0.7"
+          style="fill:rgb(0, 0, 0);stroke:rgb(245, 228, 74);color:rgb(255, 255, 255);stroke-width:0.5px;stroke-linecap:round;stroke-linejoin:miter;opacity:0.7;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+
+        <!-- Vanishing point dot -->
+        <circle cx="72" cy="40" r="1.5" fill="#f5e44a" opacity="0.5"
+          style="fill:rgb(245, 228, 74);stroke:none;color:rgb(255, 255, 255);stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;opacity:0.5;font-family:&quot;Anthropic Sans&quot;, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;font-size:16px;font-weight:400;text-anchor:start;dominant-baseline:auto" />
+      </svg>
+      <span class="app-header__title">TAREEK-Web</span>
+    </div>
+    <span class="app-header__subtitle">Build your experiment configuration step by step</span>
+  </header>
+
+  <!-- ======== Main Container ======== -->
+  <div class="app-container">
+
+    <!-- Step progress bar -->
+    <nav class="step-progress" id="stepProgress">
+      <!-- Filled by JS -->
+    </nav>
+
+    <!-- ================================================================
+       PANEL 1 — Region
+       ================================================================ -->
+    <div class="panel panel--active" id="panel-region" data-step="0">
+      <div class="panel__header">
+        <div class="panel__number">1</div>
+        <div>
+          <div class="panel__title">Region</div>
+          <div class="panel__description">Select the counties for your simulation area</div>
+        </div>
+        <span class="panel__badge hidden" id="badge-region"></span>
+      </div>
+      <div class="panel__body">
+        <div class="alert alert--info">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 16v-4M12 8h.01" />
+          </svg>
+          <!-- Maximum population: <strong>10,000,000</strong> agents. -->
+          <span>Zoom into the map and click counties to select them.</span>
+        </div>
+
+        <div class="map-container" id="countyMap">
+          <div class="map-overlay" id="mapStats">
+            <div class="map-overlay__stat">
+              <span class="map-overlay__label">Selected Counties</span>
+              <span class="map-overlay__value" id="statCountyCount">0</span>
+            </div>
+            <div class="map-overlay__stat">
+              <span class="map-overlay__label">Total Population</span>
+              <span class="map-overlay__value" id="statPopulation">0</span>
+            </div>
+          </div>
+          <div class="map-message" id="mapMessage">Zoom in to see and select counties</div>
+        </div>
+
+        <div class="selected-counties" id="selectedCountiesList"></div>
+      </div>
+      <div class="panel__footer">
+        <div></div>
+        <button class="btn btn--primary" id="btnNext0" disabled>
+          Next: Surveys
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ================================================================
+       PANEL 2 — Surveys
+       ================================================================ -->
+    <div class="panel" id="panel-surveys" data-step="1">
+      <div class="panel__header">
+        <div class="panel__number">2</div>
+        <div>
+          <div class="panel__title">Travel Surveys</div>
+          <div class="panel__description">Choose survey data sources for trip patterns</div>
+        </div>
+        <span class="panel__badge hidden" id="badge-surveys"></span>
+      </div>
+      <div class="panel__body">
+        <p class="text-sm text-muted mb-4">At least one survey must be selected. NHTS is the national default and works
+          for any US region.</p>
+
+        <!-- NHTS -->
+        <div class="card card--selected" id="card-nhts">
+          <div class="card__header">
+            <label class="checkbox">
+              <input type="checkbox" class="checkbox__input" id="chkNhts" checked>
+              <span class="checkbox__box">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </span>
+              <span class="checkbox__label"><strong>NHTS 2022</strong> — National Household Travel Survey</span>
+            </label>
+          </div>
+          <p class="text-xs text-muted" style="margin-left: 28px;">Nationwide travel behavior data. Recommended as the
+            baseline for any US region.</p>
+          <div class="form-group mt-4" style="margin-left: 28px;">
+            <div class="form-label">
+              Weight
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Blending weight when multiple surveys are selected. 0 = not used, 1 = full
+                  weight. When only one survey is selected, weight is ignored.</span>
+              </span>
+            </div>
+            <div class="slider-group" style="max-width: 300px;">
+              <input type="range" min="0" max="1" step="0.1" value="1" id="nhtsWeight">
+              <span class="slider-value" id="nhtsWeightVal">1.0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Custom Survey Upload -->
+        <div class="card" id="card-custom-survey">
+          <div class="card__header">
+            <label class="checkbox">
+              <input type="checkbox" class="checkbox__input" id="chkCustomSurvey">
+              <span class="checkbox__box">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </span>
+              <span class="checkbox__label"><strong>Custom Survey</strong> — Upload your own travel survey data</span>
+            </label>
+          </div>
+          <div id="customSurveyOptions" class="hidden" style="margin-left: 28px; margin-top: 12px;">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Survey Type</label>
+                <select class="form-select" id="customSurveyType">
+                  <option value="tbi">TBI (Travel Behavior Inventory)</option>
+                  <option value="other">Other CSV format</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Year</label>
+                <input type="text" class="form-input" id="customSurveyYear" placeholder="e.g. 2023" value="2023">
+              </div>
+            </div>
+            <div class="file-upload" id="surveyFileUpload">
+              <div class="file-upload__icon">📁</div>
+              <div class="file-upload__text">Click to upload survey CSV file</div>
+              <div class="file-upload__hint">Or drag and drop here</div>
+            </div>
+            <input type="file" id="surveyFileInput" accept=".csv" class="hidden">
+            <div id="surveyFileName" class="text-sm mt-2 text-muted"></div>
+            <div class="form-group mt-4">
+              <div class="form-label">Weight</div>
+              <div class="slider-group" style="max-width: 300px;">
+                <input type="range" min="0" max="1" step="0.1" value="0.5" id="customSurveyWeight">
+                <span class="slider-value" id="customSurveyWeightVal">0.5</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel__footer">
+        <button class="btn btn--secondary" id="btnBack1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+        <button class="btn btn--primary" id="btnNext1">
+          Next: Transportation Modes
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ================================================================
+       PANEL 3 — Transportation Modes
+       ================================================================ -->
+    <div class="panel" id="panel-modes" data-step="2">
+      <div class="panel__header">
+        <div class="panel__number">3</div>
+        <div>
+          <div class="panel__title">Transportation Modes</div>
+          <div class="panel__description">Configure available travel modes and their parameters</div>
+        </div>
+        <span class="panel__badge hidden" id="badge-modes"></span>
+      </div>
+      <div class="panel__body">
+
+        <!-- Car -->
+        <div class="mode-card mode-card--enabled" id="modeCard-car">
+          <div class="mode-card__icon">🚗</div>
+          <div class="mode-card__content">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span class="mode-card__title">Car</span>
+              <label class="toggle">
+                <input type="checkbox" class="toggle__input" id="modeEnable-car" checked>
+                <span class="toggle__track"></span>
+              </label>
+            </div>
+            <div class="mode-card__settings">
+              <div class="form-row">
+                <div class="form-group">
+                  <div class="form-label">
+                    Survey Rate
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">Mode share from survey data. 'auto' computes it from the selected
+                        surveys.</span>
+                    </span>
+                  </div>
+                  <select class="form-select" id="mode-car-survey_rate">
+                    <option value="auto" selected>Auto (from survey)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <div class="form-label">
+                    Share Adjustment
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">Additive adjustment to final mode share in percentage points. E.g., 0.05
+                        adds 5%.</span>
+                    </span>
+                  </div>
+                  <input type="number" class="form-input" id="mode-car-share_adj" value="0" step="0.01" min="-1"
+                    max="1">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bus -->
+        <div class="mode-card mode-card--enabled" id="modeCard-bus">
+          <div class="mode-card__icon">🚌</div>
+          <div class="mode-card__content">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span class="mode-card__title">Bus</span>
+              <label class="toggle">
+                <input type="checkbox" class="toggle__input" id="modeEnable-bus" checked>
+                <span class="toggle__track"></span>
+              </label>
+            </div>
+            <div class="mode-card__settings">
+              <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+                <div class="form-group">
+                  <div class="form-label">
+                    Config Rate
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">Target mode share. Set before chain_consistency filtering reduces it in
+                        practice.</span>
+                    </span>
+                  </div>
+                  <input type="number" class="form-input" id="mode-bus-config_rate" value="0.09" step="0.01" min="0"
+                    max="1">
+                </div>
+                <div class="form-group">
+                  <div class="form-label">
+                    Blend Weight
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">0 = pure survey rate, 1 = pure config rate. Controls how much to trust
+                        the configured target vs survey data.</span>
+                    </span>
+                  </div>
+                  <div class="slider-group">
+                    <input type="range" min="0" max="1" step="0.1" value="0.7" id="mode-bus-blend_weight">
+                    <span class="slider-value" id="mode-bus-blend_weight_val">0.7</span>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <div class="form-label">
+                    Access Buffer (m)
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">Maximum walking distance (meters) to a bus stop for the mode to be
+                        available. Larger = more people can access bus.</span>
+                    </span>
+                  </div>
+                  <input type="number" class="form-input" id="mode-bus-access_buffer" value="900" step="100" min="100"
+                    max="5000">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Rail -->
+        <div class="mode-card mode-card--enabled" id="modeCard-rail">
+          <div class="mode-card__icon">🚆</div>
+          <div class="mode-card__content">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span class="mode-card__title">Rail</span>
+              <label class="toggle">
+                <input type="checkbox" class="toggle__input" id="modeEnable-rail" checked>
+                <span class="toggle__track"></span>
+              </label>
+            </div>
+            <div class="mode-card__settings">
+              <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+                <div class="form-group">
+                  <div class="form-label">Config Rate</div>
+                  <input type="number" class="form-input" id="mode-rail-config_rate" value="0.06" step="0.01" min="0"
+                    max="1">
+                </div>
+                <div class="form-group">
+                  <div class="form-label">Blend Weight</div>
+                  <div class="slider-group">
+                    <input type="range" min="0" max="1" step="0.1" value="0.7" id="mode-rail-blend_weight">
+                    <span class="slider-value" id="mode-rail-blend_weight_val">0.7</span>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <div class="form-label">Access Buffer (m)</div>
+                  <input type="number" class="form-input" id="mode-rail-access_buffer" value="1500" step="100" min="100"
+                    max="5000">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Walk -->
+        <div class="mode-card mode-card--enabled" id="modeCard-walk">
+          <div class="mode-card__icon">🚶</div>
+          <div class="mode-card__content">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span class="mode-card__title">Walk</span>
+              <label class="toggle">
+                <input type="checkbox" class="toggle__input" id="modeEnable-walk" checked>
+                <span class="toggle__track"></span>
+              </label>
+            </div>
+            <div class="mode-card__settings">
+              <div class="form-row">
+                <div class="form-group">
+                  <div class="form-label">
+                    Max Distance (m)
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">Maximum OD distance for walk trips. Trips beyond this distance cannot use
+                        walk mode.</span>
+                    </span>
+                  </div>
+                  <input type="number" class="form-input" id="mode-walk-max_distance" value="2000" step="100" min="500"
+                    max="10000">
+                </div>
+                <div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bike -->
+        <div class="mode-card mode-card--enabled" id="modeCard-bike">
+          <div class="mode-card__icon">🚲</div>
+          <div class="mode-card__content">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span class="mode-card__title">Bike</span>
+              <label class="toggle">
+                <input type="checkbox" class="toggle__input" id="modeEnable-bike" checked>
+                <span class="toggle__track"></span>
+              </label>
+            </div>
+            <div class="mode-card__settings">
+              <div class="form-row">
+                <div class="form-group">
+                  <div class="form-label">Max Distance (m)</div>
+                  <input type="number" class="form-input" id="mode-bike-max_distance" value="8000" step="500" min="1000"
+                    max="30000">
+                </div>
+                <div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mode Choice Settings -->
+        <hr class="section-divider">
+        <div class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 20V10M18 20V4M6 20v-4" />
+          </svg>
+          Mode Choice Settings
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <div class="form-label">
+              Fallback Mode
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Mode used when no other mode is available for an OD pair (e.g., rural area with
+                  no transit, too far for walk/bike).</span>
+              </span>
+            </div>
+            <select class="form-select" id="modeChoice-fallback">
+              <option value="car" selected>Car</option>
+              <option value="walk">Walk</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <div class="form-label">
+              Chain Consistency
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">If enabled, all legs in an activity chain use the same mode (e.g.,
+                  home→work→home both by car). Mode is sampled once for all legs.</span>
+              </span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" class="toggle__input" id="modeChoice-chainConsistency" checked>
+              <span class="toggle__track"></span>
+              <span class="toggle__label">Enabled</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="panel__footer">
+        <button class="btn btn--secondary" id="btnBack2">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+        <button class="btn btn--primary" id="btnNext2">
+          Next: Transit
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ================================================================
+       PANEL 4 — Transit (GTFS)
+       ================================================================ -->
+    <div class="panel" id="panel-transit" data-step="3">
+      <div class="panel__header">
+        <div class="panel__number">4</div>
+        <div>
+          <div class="panel__title">Transit Configuration</div>
+          <div class="panel__description">GTFS feeds and transit network mapping settings</div>
+        </div>
+        <span class="panel__badge hidden" id="badge-transit"></span>
+      </div>
+      <div class="panel__body">
+
+        <div class="form-group">
+          <div class="form-label">
+            Enable Transit Network
+            <span class="info-icon" tabindex="0">?
+              <span class="info-popup">If enabled, uses pt2matsim pipeline to generate a multimodal network (road +
+                transit) from OSM + GTFS. If disabled, road-only network.</span>
+            </span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" class="toggle__input" id="transit-enabled" checked>
+            <span class="toggle__track"></span>
+            <span class="toggle__label">Enabled — builds road + transit network from GTFS feeds</span>
+          </label>
+        </div>
+
+        <div id="transitSettings">
+          <hr class="section-divider">
+          <div class="section-title">GTFS Feed Settings</div>
+          <div class="form-row">
+            <div class="form-group">
+              <div class="form-label">
+                Catalog Max Age (days)
+                <span class="info-icon" tabindex="0">?
+                  <span class="info-popup">Re-download the Mobility Database catalog CSV if the local copy is older than
+                    this many days.</span>
+                </span>
+              </div>
+              <input type="number" class="form-input" id="gtfs-catalog_max_age" value="7" min="1" max="365">
+            </div>
+            <div class="form-group">
+              <div class="form-label">
+                Feed Max Age (days)
+                <span class="info-icon" tabindex="0">?
+                  <span class="info-popup">Re-download individual GTFS feed zips if the cached copy is older than this
+                    many days.</span>
+                </span>
+              </div>
+              <input type="number" class="form-input" id="gtfs-feed_max_age" value="30" min="1" max="365">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="form-label">
+              GTFS Sample Day
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Which day to sample GTFS schedules for. 'dayWithMostTrips' auto-selects the
+                  busiest service day.</span>
+              </span>
+            </div>
+            <select class="form-select" id="gtfs-sample_day" style="max-width: 300px;">
+              <option value="dayWithMostTrips" selected>Day with most trips (auto)</option>
+              <option value="custom">Specific date...</option>
+            </select>
+          </div>
+
+          <!-- pt2matsim Advanced -->
+          <div class="collapsible" id="pt2matsimCollapsible">
+            <button class="collapsible__trigger" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+              Advanced: pt2matsim Mapping Parameters
+            </button>
+            <div class="collapsible__content">
+              <p class="text-sm text-muted mb-4">Controls how GTFS transit routes are mapped to the road network.
+                Defaults work well for most regions.</p>
+              <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+                <div class="form-group">
+                  <div class="form-label">
+                    Candidate Distance (m)
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">Maximum distance to search for candidate network links near a transit
+                        stop. Increase for suburban/rural areas.</span>
+                    </span>
+                  </div>
+                  <input type="number" class="form-input" id="pt2m-maxLinkCandidateDistance" value="90" step="10"
+                    min="10" max="500">
+                </div>
+                <div class="form-group">
+                  <div class="form-label">
+                    Max Travel Cost Factor
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">Maximum allowed cost ratio for mapped vs shortest path. Higher = more
+                        permissive routing. Range: 1.5 to 5.0.</span>
+                    </span>
+                  </div>
+                  <input type="number" class="form-input" id="pt2m-maxTravelCostFactor" value="5.0" step="0.5" min="1.5"
+                    max="10">
+                </div>
+                <div class="form-group">
+                  <div class="form-label">
+                    Link Threshold
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">Minimum candidate links to find before expanding search radius.</span>
+                    </span>
+                  </div>
+                  <input type="number" class="form-input" id="pt2m-nLinkThreshold" value="6" min="1" max="20">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <div class="form-label">
+                    Candidate Distance Multiplier
+                    <span class="info-icon" tabindex="0">?
+                      <span class="info-popup">When fewer than nLinkThreshold candidates are found, the search radius is
+                        expanded by this multiplier.</span>
+                    </span>
+                  </div>
+                  <input type="number" class="form-input" id="pt2m-candidateDistanceMultiplier" value="1.6" step="0.1"
+                    min="1.0" max="5.0">
+                </div>
+                <div class="form-group">
+                  <div class="form-label">Travel Cost Type</div>
+                  <select class="form-select" id="pt2m-travelCostType">
+                    <option value="linkLength" selected>Link Length</option>
+                    <option value="travelTime">Travel Time</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel__footer">
+        <button class="btn btn--secondary" id="btnBack3">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+        <button class="btn btn--primary" id="btnNext3">
+          Next: Travel Demand
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ================================================================
+       PANEL 5 — Travel Demand
+       ================================================================ -->
+    <div class="panel" id="panel-demand" data-step="4">
+      <div class="panel__header">
+        <div class="panel__number">5</div>
+        <div>
+          <div class="panel__title">Travel Demand</div>
+          <div class="panel__description">Scaling, work plans, and non-work trip purposes</div>
+        </div>
+        <span class="panel__badge hidden" id="badge-demand"></span>
+      </div>
+      <div class="panel__body">
+
+        <!-- Scaling -->
+        <div class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path
+              d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+          </svg>
+          Scaling Parameters
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <div class="form-label">
+              Scaling Factor
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Fraction of full population to simulate. E.g., 0.10 = 10% sample. Lower values
+                  run faster but with less detail.</span>
+              </span>
+            </div>
+            <div class="slider-group">
+              <input type="range" min="0.01" max="1.0" step="0.005" value="0.105" id="demand-scaling_factor">
+              <span class="slider-value" id="demand-scaling_factor_val">0.105</span>
+            </div>
+            <div class="form-hint" id="demand-scaling_hint">Simulating ~10.5% of the population</div>
+          </div>
+          <div class="form-group">
+            <div class="form-label">
+              Target Plans
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">'all' generates plans for the entire scaled population. Or set a specific
+                  number to cap total plans.</span>
+              </span>
+            </div>
+            <select class="form-select" id="demand-target_plans">
+              <option value="all" selected>All (entire scaled population)</option>
+              <option value="custom">Custom number...</option>
+            </select>
+            <input type="number" class="form-input mt-2 hidden" id="demand-target_plans_custom" placeholder="e.g. 50000"
+              min="100">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <div class="form-label">
+              Random Seed
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Random seed for reproducibility. Same seed = same plans each run.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="demand-random_seed" value="42" min="1">
+          </div>
+          <div class="form-group">
+            <div class="form-label">
+              Work Scaling Multiplier
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Multiplier applied on top of scaling_factor for work trips only. 1.0 = same as
+                  scaling_factor.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="demand-work_scaling_mult" value="1.0" step="0.1" min="0.1"
+              max="5.0">
+          </div>
+        </div>
+
+        <!-- Chain Settings -->
+        <hr class="section-divider">
+        <div class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+          </svg>
+          Activity Chain Settings
+        </div>
+        <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+          <div class="form-group">
+            <div class="form-label">
+              Min Chain Length
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Minimum activities per chain. 3 = smallest valid chain (Home-X-Home).</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="chain-min_length" value="3" min="3" max="20">
+          </div>
+          <div class="form-group">
+            <div class="form-label">
+              Max Work Activities
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Maximum Work activities per chain. 1 = simple commute, 2 = allows split-shift
+                  or lunch-at-home.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="chain-max_work" value="2" min="1" max="5">
+          </div>
+          <div class="form-group">
+            <div class="form-label">
+              Early Stop Exponent
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Controls chain generation stopping. 1.0 = linear, 2.0 = quadratic (default).
+                  Higher = longer chains.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="chain-early_stop" value="2.0" step="0.5" min="1.0" max="5.0">
+          </div>
+        </div>
+
+        <!-- Non-Work Purposes -->
+        <hr class="section-divider">
+        <div class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+          Non-Work Trip Purposes
+        </div>
+        <p class="text-sm text-muted mb-4">Enable or disable trip purposes for non-workers (retirees, students, etc.).
+          Expand each to adjust parameters.</p>
+
+        <div class="form-group">
+          <div class="form-label">
+            Non-Work Trip Share
+            <span class="info-icon" tabindex="0">?
+              <span class="info-popup">Share of non-workers who travel on a given day. Applied as a multiplier to all
+                non-work trip categories.</span>
+            </span>
+          </div>
+          <div class="slider-group" style="max-width: 400px;">
+            <input type="range" min="0.1" max="1.0" step="0.05" value="0.8" id="nonwork-trip_share">
+            <span class="slider-value" id="nonwork-trip_share_val">0.80</span>
+          </div>
+        </div>
+
+        <!-- Shopping -->
+        <div class="purpose-card purpose-card--enabled" id="purposeCard-shopping">
+          <div class="purpose-card__header" onclick="togglePurposeCard('shopping')">
+            <span class="purpose-card__icon">🛒</span>
+            <span class="purpose-card__name">Shopping</span>
+            <label class="toggle" onclick="event.stopPropagation()">
+              <input type="checkbox" class="toggle__input" id="purpose-shopping-enabled" checked>
+              <span class="toggle__track"></span>
+            </label>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"
+              style="color:var(--color-gray-400)">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </div>
+          <div class="purpose-card__body">
+            <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+              <div class="form-group">
+                <div class="form-label">Config Rate
+                  <span class="info-icon" tabindex="0">?<span class="info-popup">Target trip rate — fraction of
+                      non-employees making shopping trips per day.</span></span>
+                </div>
+                <input type="number" class="form-input" id="purpose-shopping-config_rate" value="0.25" step="0.01"
+                  min="0" max="1">
+              </div>
+              <div class="form-group">
+                <div class="form-label">Blend Weight</div>
+                <div class="slider-group">
+                  <input type="range" min="0" max="1" step="0.1" value="0.7" id="purpose-shopping-blend_weight">
+                  <span class="slider-value" id="purpose-shopping-blend_weight_val">0.7</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <div class="form-label">OD Beta
+                  <span class="info-icon" tabindex="0">?<span class="info-popup">Distance decay in gravity model. Higher
+                      = trips stay closer to home.</span></span>
+                </div>
+                <input type="number" class="form-input" id="purpose-shopping-od_beta" value="2.0" step="0.1" min="0.1"
+                  max="5">
+              </div>
+            </div>
+            <div class="collapsible" id="collapsible-shopping-poi">
+              <button class="collapsible__trigger" type="button"
+                onclick="toggleCollapsible('collapsible-shopping-poi')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+                Advanced: POI Weighting
+              </button>
+              <div class="collapsible__content">
+                <p class="text-xs text-muted mb-2">Weights for POI attractiveness scoring.</p>
+                <div class="form-row">
+                  <div class="form-group">
+                    <div class="form-label">Has Name Bonus</div>
+                    <input type="number" class="form-input" id="purpose-shopping-poi-has_name" value="1.5" step="0.1"
+                      min="1">
+                  </div>
+                  <div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- School -->
+        <div class="purpose-card purpose-card--enabled" id="purposeCard-school">
+          <div class="purpose-card__header" onclick="togglePurposeCard('school')">
+            <span class="purpose-card__icon">🎓</span>
+            <span class="purpose-card__name">School</span>
+            <label class="toggle" onclick="event.stopPropagation()">
+              <input type="checkbox" class="toggle__input" id="purpose-school-enabled" checked>
+              <span class="toggle__track"></span>
+            </label>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"
+              style="color:var(--color-gray-400)">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </div>
+          <div class="purpose-card__body">
+            <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+              <div class="form-group">
+                <div class="form-label">Config Rate</div>
+                <input type="number" class="form-input" id="purpose-school-config_rate" value="0.25" step="0.01" min="0"
+                  max="1">
+              </div>
+              <div class="form-group">
+                <div class="form-label">Blend Weight</div>
+                <div class="slider-group">
+                  <input type="range" min="0" max="1" step="0.1" value="0.7" id="purpose-school-blend_weight">
+                  <span class="slider-value" id="purpose-school-blend_weight_val">0.7</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <div class="form-label">OD Beta</div>
+                <input type="number" class="form-input" id="purpose-school-od_beta" value="1.8" step="0.1" min="0.1"
+                  max="5">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Social -->
+        <div class="purpose-card purpose-card--enabled" id="purposeCard-social">
+          <div class="purpose-card__header" onclick="togglePurposeCard('social')">
+            <span class="purpose-card__icon">🎭</span>
+            <span class="purpose-card__name">Social / Recreation</span>
+            <label class="toggle" onclick="event.stopPropagation()">
+              <input type="checkbox" class="toggle__input" id="purpose-social-enabled" checked>
+              <span class="toggle__track"></span>
+            </label>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"
+              style="color:var(--color-gray-400)">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </div>
+          <div class="purpose-card__body">
+            <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+              <div class="form-group">
+                <div class="form-label">Config Rate</div>
+                <input type="number" class="form-input" id="purpose-social-config_rate" value="0.15" step="0.01" min="0"
+                  max="1">
+              </div>
+              <div class="form-group">
+                <div class="form-label">Blend Weight</div>
+                <div class="slider-group">
+                  <input type="range" min="0" max="1" step="0.1" value="0.7" id="purpose-social-blend_weight">
+                  <span class="slider-value" id="purpose-social-blend_weight_val">0.7</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <div class="form-label">OD Beta</div>
+                <input type="number" class="form-input" id="purpose-social-od_beta" value="2.0" step="0.1" min="0.1"
+                  max="5">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dining -->
+        <div class="purpose-card purpose-card--enabled" id="purposeCard-dining">
+          <div class="purpose-card__header" onclick="togglePurposeCard('dining')">
+            <span class="purpose-card__icon">🍽️</span>
+            <span class="purpose-card__name">Dining</span>
+            <label class="toggle" onclick="event.stopPropagation()">
+              <input type="checkbox" class="toggle__input" id="purpose-dining-enabled" checked>
+              <span class="toggle__track"></span>
+            </label>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"
+              style="color:var(--color-gray-400)">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </div>
+          <div class="purpose-card__body">
+            <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+              <div class="form-group">
+                <div class="form-label">Config Rate</div>
+                <input type="number" class="form-input" id="purpose-dining-config_rate" value="0.15" step="0.01" min="0"
+                  max="1">
+              </div>
+              <div class="form-group">
+                <div class="form-label">Blend Weight</div>
+                <div class="slider-group">
+                  <input type="range" min="0" max="1" step="0.1" value="0.7" id="purpose-dining-blend_weight">
+                  <span class="slider-value" id="purpose-dining-blend_weight_val">0.7</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <div class="form-label">OD Beta</div>
+                <input type="number" class="form-input" id="purpose-dining-od_beta" value="2.0" step="0.1" min="0.1"
+                  max="5">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Other -->
+        <div class="purpose-card purpose-card--enabled" id="purposeCard-other">
+          <div class="purpose-card__header" onclick="togglePurposeCard('other')">
+            <span class="purpose-card__icon">📦</span>
+            <span class="purpose-card__name">Other</span>
+            <label class="toggle" onclick="event.stopPropagation()">
+              <input type="checkbox" class="toggle__input" id="purpose-other-enabled" checked>
+              <span class="toggle__track"></span>
+            </label>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"
+              style="color:var(--color-gray-400)">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </div>
+          <div class="purpose-card__body">
+            <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+              <div class="form-group">
+                <div class="form-label">Config Rate</div>
+                <input type="number" class="form-input" id="purpose-other-config_rate" value="0.20" step="0.01" min="0"
+                  max="1">
+              </div>
+              <div class="form-group">
+                <div class="form-label">Blend Weight</div>
+                <div class="slider-group">
+                  <input type="range" min="0" max="1" step="0.1" value="0.7" id="purpose-other-blend_weight">
+                  <span class="slider-value" id="purpose-other-blend_weight_val">0.7</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <div class="form-label">OD Beta</div>
+                <input type="number" class="form-input" id="purpose-other-od_beta" value="2.0" step="0.1" min="0.1"
+                  max="5">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel__footer">
+        <button class="btn btn--secondary" id="btnBack4">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+        <button class="btn btn--primary" id="btnNext4">
+          Next: Time & Duration
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ================================================================
+       PANEL 6 — Time & Duration Constraints
+       ================================================================ -->
+    <div class="panel" id="panel-time" data-step="5">
+      <div class="panel__header">
+        <div class="panel__number">6</div>
+        <div>
+          <div class="panel__title">Time & Duration</div>
+          <div class="panel__description">Activity duration constraints and time model settings</div>
+        </div>
+        <span class="panel__badge hidden" id="badge-time"></span>
+      </div>
+      <div class="panel__body">
+
+        <div class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+          Activity Duration Constraints
+        </div>
+        <p class="text-sm text-muted mb-4">Minimum and maximum durations for each activity type. These constrain the
+          KDE-sampled durations.</p>
+
+        <!-- Duration constraints table-like layout -->
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);">
+            <thead>
+              <tr style="border-bottom:2px solid var(--color-gray-200);text-align:left;">
+                <th style="padding:8px 12px;font-weight:600;color:var(--color-gray-600);">Activity</th>
+                <th style="padding:8px 12px;font-weight:600;color:var(--color-gray-600);">Min (min)</th>
+                <th style="padding:8px 12px;font-weight:600;color:var(--color-gray-600);">Max (min)</th>
+                <th style="padding:8px 12px;font-weight:600;color:var(--color-gray-600);">
+                  Trim Priority
+                  <span class="info-icon" tabindex="0" style="vertical-align:middle;">?
+                    <span class="info-popup">Trimming order when schedule exceeds 24h. 1=mandatory (trimmed last),
+                      3=discretionary (trimmed first).</span>
+                  </span>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="durationTable">
+              <!-- Filled by JS from defaults -->
+            </tbody>
+          </table>
+        </div>
+
+        <hr class="section-divider">
+        <div class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+          </svg>
+          Time Model Settings
+        </div>
+        <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+          <div class="form-group">
+            <div class="form-label">
+              Departure Jitter (min)
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Random jitter added to first departure time to prevent clustering at KDE peaks.
+                  0 = no jitter.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="time-departure_jitter" value="5" min="0" max="60">
+          </div>
+          <div class="form-group">
+            <div class="form-label">
+              Trim Jitter (min)
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Random jitter added to trimmed activity durations to prevent departure
+                  clustering.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="time-trim_jitter" value="15" min="0" max="60">
+          </div>
+          <div class="form-group">
+            <div class="form-label">
+              Max Travel Buffer (min)
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Maximum total travel time buffer allowed in a day's schedule.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="time-max_travel_buffer" value="180" min="30" max="480">
+          </div>
+        </div>
+
+        <hr class="section-divider">
+        <div class="section-title">POI Assignment</div>
+        <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+          <div class="form-group">
+            <div class="form-label">
+              Initial Radius (m)
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Initial search radius for finding POIs near a home location.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="poi-initial_radius" value="2000" step="500" min="500"
+              max="10000">
+          </div>
+          <div class="form-group">
+            <div class="form-label">Radius Increment (m)</div>
+            <input type="number" class="form-input" id="poi-radius_increment" value="1000" step="500" min="500"
+              max="5000">
+          </div>
+          <div class="form-group">
+            <div class="form-label">Max Retries</div>
+            <input type="number" class="form-input" id="poi-max_retries" value="10" min="1" max="50">
+          </div>
+        </div>
+      </div>
+      <div class="panel__footer">
+        <button class="btn btn--secondary" id="btnBack5">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+        <button class="btn btn--primary" id="btnNext5">
+          Next: Simulation
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ================================================================
+       PANEL 7 — Simulation
+       ================================================================ -->
+    <div class="panel" id="panel-simulation" data-step="6">
+      <div class="panel__header">
+        <div class="panel__number">7</div>
+        <div>
+          <div class="panel__title">Simulation</div>
+          <div class="panel__description">MATSim parameters, traffic counts, and evaluation settings</div>
+        </div>
+        <span class="panel__badge hidden" id="badge-simulation"></span>
+      </div>
+      <div class="panel__body">
+
+        <div class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 20V10M18 20V4M6 20v-4" />
+          </svg>
+          MATSim Parameters
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <div class="form-label">
+              Iterations
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Number of MATSim iterations for route/plan optimization. More iterations =
+                  better convergence but longer runtime. 50-200 typical.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="sim-iterations" value="100" min="10" max="1000" step="10">
+          </div>
+          <div class="form-group">
+            <div class="form-label">
+              Link Stats Averaging
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Number of iterations to average link statistics over. Smooths out
+                  iteration-to-iteration noise.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="sim-linkstats_avg" value="5" min="1" max="50">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <div class="form-label">
+              Flow Capacity Factor
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Should roughly match scaling_factor. Controls how many vehicles can pass a link
+                  per time unit.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="sim-flow_capacity" value="0.1" step="0.01" min="0.01" max="1">
+          </div>
+          <div class="form-group">
+            <div class="form-label">
+              Storage Capacity Factor
+              <span class="info-icon" tabindex="0">?
+                <span class="info-popup">Should be >= flow_capacity_factor. Controls how many vehicles can be on a link
+                  simultaneously.</span>
+              </span>
+            </div>
+            <input type="number" class="form-input" id="sim-storage_capacity" value="0.12" step="0.01" min="0.01"
+              max="1">
+          </div>
+        </div>
+
+        <!-- Counts -->
+        <hr class="section-divider">
+        <div class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7" />
+            <rect x="14" y="3" width="7" height="7" />
+            <rect x="14" y="14" width="7" height="7" />
+            <rect x="3" y="14" width="7" height="7" />
+          </svg>
+          Traffic Counts
+        </div>
+        <div class="form-group">
+          <label class="toggle">
+            <input type="checkbox" class="toggle__input" id="counts-enabled" checked>
+            <span class="toggle__track"></span>
+            <span class="toggle__label">Enable traffic count validation</span>
+          </label>
+        </div>
+        <div id="countsSettings">
+          <div class="form-row--3" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+            <div class="form-group">
+              <div class="form-label">
+                FHA Data Year
+                <span class="info-icon" tabindex="0">?
+                  <span class="info-popup">Year of FHA/TMAS traffic count data to use for validation.</span>
+                </span>
+              </div>
+              <input type="number" class="form-input" id="counts-fha_year" value="2024" min="2015" max="2026">
+            </div>
+            <div class="form-group">
+              <div class="form-label">
+                FHA Data Month
+                <span class="info-icon" tabindex="0">?
+                  <span class="info-popup">Month of volume data (1-12). FHA distributes one zip per month.</span>
+                </span>
+              </div>
+              <select class="form-select" id="counts-fha_month">
+                <option value="1">January</option>
+                <option value="2">February</option>
+                <option value="3">March</option>
+                <option value="4">April</option>
+                <option value="5">May</option>
+                <option value="6">June</option>
+                <option value="7" selected>July</option>
+                <option value="8">August</option>
+                <option value="9">September</option>
+                <option value="10">October</option>
+                <option value="11">November</option>
+                <option value="12">December</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <div class="form-label">FHA Weight</div>
+              <div class="slider-group">
+                <input type="range" min="0" max="1" step="0.1" value="1" id="counts-fha_weight">
+                <span class="slider-value" id="counts-fha_weight_val">1.0</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Evaluation -->
+        <hr class="section-divider">
+        <div class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          </svg>
+          Evaluation
+        </div>
+        <div class="form-group">
+          <label class="toggle">
+            <input type="checkbox" class="toggle__input" id="eval-run" checked>
+            <span class="toggle__track"></span>
+            <span class="toggle__label">Run post-simulation evaluation</span>
+          </label>
+        </div>
+        <div id="evalSettings">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="toggle">
+                <input type="checkbox" class="toggle__input" id="eval-spatial_maps" checked>
+                <span class="toggle__track"></span>
+                <span class="toggle__label">Generate spatial comparison maps</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="toggle">
+                <input type="checkbox" class="toggle__input" id="eval-per_device">
+                <span class="toggle__track"></span>
+                <span class="toggle__label">Generate per-device reports</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel__footer">
+        <button class="btn btn--secondary" id="btnBack6">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+        <div style="display:flex;gap:12px;">
+          <button class="btn btn--success btn--lg" id="btnExport">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Export Config
+          </button>
+          <button class="btn btn--primary btn--lg" id="btnStartSim" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            Start Simulation
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /app-container -->
+
+  <!-- App JS -->
+  <script src="js/app.js"></script>
+
+</body>
+
+</html>
