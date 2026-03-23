@@ -104,7 +104,7 @@ typing_extensions==4.13.2
 tzdata==2025.2
 uc-micro-py==1.0.3
 uvicorn==0.34.2
-urllib3==2.5.0
+urllib3==2.6.3
 wcwidth==0.2.13
 webencodings==0.5.1
 xarray==2025.11.0
