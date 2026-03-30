@@ -72,7 +72,7 @@ prompt_toolkit==3.0.51
 psutil==7.0.0
 pure_eval==0.2.3
 pyct==0.6.0
-Pygments==2.19.1
+Pygments==2.20.0
 pygris==0.2.1
 pyogrio==0.11.1
 pyparsing==3.2.5
