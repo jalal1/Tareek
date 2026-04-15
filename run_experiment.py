@@ -95,6 +95,13 @@ def load_shared_nonwork_data(config: Dict) -> Dict:
     logger.info(f"  Loaded {len(survey_df):,} survey trips")
     logger.info(f"  Processed {len(persons):,} persons")
 
+    # Detect census geography level from survey location IDs
+    from data_sources.base_survey_trip import BaseSurveyTrip
+    geo_level = SurveyManager.detect_geo_level_from_df(survey_df)
+    if geo_level is None:
+        geo_level = BaseSurveyTrip.GEO_BLOCK_GROUP
+    logger.info(f"  Detected survey geo level: {geo_level}")
+
     # Process chains
     use_weight = config.get('chains', {}).get('use_weighted_chains', True)
     chains = process_trip_chains(persons, use_weight=use_weight)
@@ -152,6 +159,7 @@ def load_shared_nonwork_data(config: Dict) -> Dict:
         'trip_duration_model': trip_duration_model,
         'activity_duration_model': activity_duration_model,
         'poi_spatial_index': poi_spatial_index,
+        'geo_level': geo_level,
     }
     result.update(multi_source_data)
     return result

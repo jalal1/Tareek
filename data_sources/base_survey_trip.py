@@ -51,6 +51,17 @@ class BaseSurveyTrip(ABC):
     # Downstream OD code must check for non-null values before using.
     LOCATION_COLUMNS = {ORIGIN_LOC, DESTINATION_LOC}
 
+    # ── Census geography level constants ────────────────────────────────
+    # Determined automatically from the GEOID length in origin_loc values.
+    GEO_TRACT = 'tract'            # 11-digit GEOID: state(2) + county(3) + tract(6)
+    GEO_BLOCK_GROUP = 'block_group'  # 12-digit GEOID: state(2) + county(3) + tract(6) + bg(1)
+
+    # Maps GEOID string length → geo level constant
+    GEOID_LENGTH_TO_GEO_LEVEL = {
+        11: GEO_TRACT,
+        12: GEO_BLOCK_GROUP,
+    }
+
     # ── Canonical activity types (single source of truth) ───────────────
     # All surveys must map their raw purpose labels to these values.
     # All downstream code must reference these constants.
@@ -132,6 +143,58 @@ class BaseSurveyTrip(ABC):
             f"columns present, {len(present) - len(self.REQUIRED_COLUMNS)} extra columns"
         )
         return True
+
+    def detect_geo_level(self) -> None:
+        """Detect the census geography level from non-null origin_loc values.
+
+        Samples the ORIGIN_LOC column, measures the GEOID string length, and
+        stores the result in self.metadata['geo_level'].  Must be called after
+        clean_data() has renamed raw columns to canonical names.
+
+        Supports:
+            11 digits → tract
+            12 digits → block_group
+
+        Sets self.metadata['geo_level'] to None when all origin_loc values are
+        null (e.g. NHTS public-use file which has no geographic identifiers).
+
+        Raises:
+            ValueError: If GEOID lengths are non-uniform (dirty data) or if the
+                        length does not match any known census geography.
+        """
+        if self.data is None:
+            raise ValueError("No data loaded. Call extract_data and clean_data first.")
+
+        non_null = self.data[self.ORIGIN_LOC].dropna()
+        non_null = non_null[non_null.astype(str).str.strip() != '']
+
+        if non_null.empty:
+            logger.warning(
+                "detect_geo_level: all origin_loc values are null — "
+                "geo_level set to None (survey has no geographic identifiers)"
+            )
+            self.metadata['geo_level'] = None
+            return
+
+        lengths = non_null.astype(str).str.strip().str.len().unique()
+
+        if len(lengths) > 1:
+            raise ValueError(
+                f"detect_geo_level: non-uniform GEOID lengths found in origin_loc: "
+                f"{sorted(lengths)}. Check for dirty data or mixed geography types."
+            )
+
+        length = int(lengths[0])
+        geo_level = self.GEOID_LENGTH_TO_GEO_LEVEL.get(length)
+
+        if geo_level is None:
+            raise ValueError(
+                f"detect_geo_level: GEOID length {length} does not match any known "
+                f"census geography. Supported lengths: {list(self.GEOID_LENGTH_TO_GEO_LEVEL.keys())}"
+            )
+
+        self.metadata['geo_level'] = geo_level
+        logger.info(f"Detected geo level: '{geo_level}' (GEOID length {length})")
 
     def save_data(self, batch_size: int = 50000) -> None:
         """Save cleaned data to DuckDB (survey_trips table).

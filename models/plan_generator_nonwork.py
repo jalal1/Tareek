@@ -994,6 +994,12 @@ class NonWorkPlanGenerator:
         logger.info(f"  Loaded {len(self.survey_df):,} survey trips")
         logger.info(f"  Processed {len(self.persons):,} persons")
 
+        # Detect census geography level from survey location IDs
+        self.geo_level = SurveyManager.detect_geo_level_from_df(self.survey_df)
+        if self.geo_level is None:
+            self.geo_level = BaseSurveyTrip.GEO_BLOCK_GROUP
+        logger.info(f"  Detected survey geo level: {self.geo_level}")
+
         # Process chains (needed for _initialize_chain_model)
         use_weight = self.config.get('chains', {}).get('use_weighted_chains', True)
         chains = process_trip_chains(self.persons, use_weight=use_weight)
@@ -1013,6 +1019,7 @@ class NonWorkPlanGenerator:
         self.survey_df = shared_data['survey_df']
         self.persons = shared_data['persons']
         self.chains_df = shared_data['chains_df']
+        self.geo_level = shared_data.get('geo_level', BaseSurveyTrip.GEO_BLOCK_GROUP)
 
         logger.info(f"  Using {len(self.home_locs_dict):,} home blocks (pre-loaded)")
         logger.info(f"  Using {len(self.poi_data_flat):,} POIs (pre-loaded)")
@@ -1358,7 +1365,8 @@ class NonWorkPlanGenerator:
             poi_data=self.poi_data_flat,  # Use flat list for OD matrix creation
             survey_df=self.survey_df,
             purpose=self.purpose,
-            poi_block_mapping=poi_block_mapping
+            poi_block_mapping=poi_block_mapping,
+            geo_level=self.geo_level,
         )
 
         # Store unscaled total for logging
@@ -1683,6 +1691,7 @@ class NonWorkPlanGenerator:
             'all_chains_df': self.chains_df,  # Unfiltered chains for length distribution
             'avg_trip_duration_min': self.avg_trip_duration_min,
             'gtfs_stop_data': self._serialize_gtfs_stop_data(),
+            'geo_level': self.geo_level,
         }
 
         # Propagate per-source data for multi-source blending in workers
