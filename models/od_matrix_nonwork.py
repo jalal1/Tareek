@@ -19,32 +19,43 @@ from utils.poi_weighting import POIWeighting
 
 logger = setup_logger(__name__)
 
+# Maps geo level constant → number of GEOID characters used as the zone key
+_GEO_LEVEL_PREFIX_LEN: Dict[str, int] = {
+    BaseSurveyTrip.GEO_TRACT: 11,
+    BaseSurveyTrip.GEO_BLOCK_GROUP: 12,
+}
 
-def _aggregate_to_block_groups(
+
+def _aggregate_to_geo_level(
     home_locs_dict: Dict[str, Dict[str, Any]],
     poi_density_dict: Dict[str, int],
+    geo_level: str = BaseSurveyTrip.GEO_BLOCK_GROUP,
 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, int]]:
-    """Pre-aggregate block-level data to block-group level for the gravity model.
+    """Pre-aggregate block-level data to the requested census geography level.
 
-    Reduces the dimensionality of the cdist call from ~164K×31K blocks to
-    ~4K×3K block groups, cutting memory from ~113 GB to < 100 MB.
+    Reduces the dimensionality of the cdist call — e.g. from ~164K×31K blocks
+    to ~4K×3K block groups, cutting memory from ~113 GB to < 100 MB.
 
     Args:
         home_locs_dict: Block-level dict {geoid_15: {lat, lon, non_employees, ...}}
         poi_density_dict: Block-level dict {geoid_15: poi_count}
+        geo_level: Target census geography — GEO_BLOCK_GROUP (12-digit, default)
+                   or GEO_TRACT (11-digit).
 
     Returns:
-        (bg_home_dict, bg_poi_dict) at block-group (12-digit) granularity.
-        bg_home_dict values have keys: lat, lon, non_employees.
+        (zone_home_dict, zone_poi_dict) at the requested granularity.
+        zone_home_dict values have keys: lat, lon, non_employees.
         Coordinates are weighted averages (weighted by non_employees).
     """
     from collections import defaultdict
+
+    prefix_len = _GEO_LEVEL_PREFIX_LEN.get(geo_level, 12)
 
     # --- Aggregate home locations ---
     bg_data = defaultdict(lambda: {"sum_ne": 0.0, "wlat": 0.0, "wlon": 0.0,
                                     "ulat": 0.0, "ulon": 0.0, "n": 0})
     for geoid, data in home_locs_dict.items():
-        bg = geoid[:12]
+        bg = geoid[:prefix_len]
         ne = data.get("non_employees", 0) or 0
         lat = data.get("lat", 0.0) or 0.0
         lon = data.get("lon", 0.0) or 0.0
@@ -73,14 +84,15 @@ def _aggregate_to_block_groups(
     bg_poi_dict: Dict[str, int] = defaultdict(int)
     for geoid, count in poi_density_dict.items():
         if count > 0:
-            bg_poi_dict[geoid[:12]] += count
+            bg_poi_dict[geoid[:prefix_len]] += count
 
     logger.info(f"  Pre-aggregated {len(home_locs_dict):,} blocks → "
-                f"{len(bg_home_dict):,} block groups (home)")
+                f"{len(bg_home_dict):,} {geo_level}s (home)")
     logger.info(f"  Pre-aggregated POI blocks → "
-                f"{len(bg_poi_dict):,} block groups with POIs")
+                f"{len(bg_poi_dict):,} {geo_level}s with POIs")
 
     return bg_home_dict, dict(bg_poi_dict)
+
 
 
 def calculate_poi_density_per_block(poi_data: List[Dict[str, Any]], purpose: str,
@@ -468,7 +480,8 @@ def create_gravity_od_matrix_nonwork(home_locs_dict: Dict[str, Dict[str, Any]],
                                       survey_df: pd.DataFrame,
                                       beta: float = 2.0,
                                       max_iterations: int = 50,
-                                      convergence_threshold: float = 1e-4) -> Tuple[pd.DataFrame, List[str], List[str]]:
+                                      convergence_threshold: float = 1e-4,
+                                      geo_level: str = BaseSurveyTrip.GEO_BLOCK_GROUP) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
     Create singly-constrained gravity model OD matrix for non-work trips.
 
@@ -527,14 +540,14 @@ def create_gravity_od_matrix_nonwork(home_locs_dict: Dict[str, Dict[str, Any]],
     logger.info(f"")
 
     # Pre-aggregate blocks → block groups to avoid OOM on large cdist matrices
-    bg_home, bg_poi = _aggregate_to_block_groups(home_locs_dict, poi_density_dict)
+    bg_home, bg_poi = _aggregate_to_geo_level(home_locs_dict, poi_density_dict, geo_level=geo_level)
 
-    # Get sorted geoid lists (now 12-digit block group codes)
+    # Get sorted geoid lists at the aggregated geography level
     home_geoids = sorted(bg_home.keys())
     dest_geoids = sorted([gid for gid in bg_home.keys() if bg_poi.get(gid, 0) > 0])
 
-    logger.info(f"Number of home block groups: {len(home_geoids)}")
-    logger.info(f"Number of destination block groups (with POIs): {len(dest_geoids)}")
+    logger.info(f"Number of home {geo_level}s: {len(home_geoids)}")
+    logger.info(f"Number of destination {geo_level}s (with POIs): {len(dest_geoids)}")
     logger.info(f"Distance decay beta: {beta}")
 
     if len(dest_geoids) == 0:
@@ -625,7 +638,8 @@ def create_nonwork_od_matrix(config: Dict[str, Any],
                               poi_data: List[Dict[str, Any]],
                               survey_df: pd.DataFrame,
                               purpose: str,
-                              poi_block_mapping: Dict[str, str] = None) -> pd.DataFrame:
+                              poi_block_mapping: Dict[str, str] = None,
+                              geo_level: str = BaseSurveyTrip.GEO_BLOCK_GROUP) -> pd.DataFrame:
     """
     Create complete OD matrix for a non-work purpose by combining survey and gravity model.
 
@@ -637,9 +651,11 @@ def create_nonwork_od_matrix(config: Dict[str, Any],
         purpose: Trip purpose ('Shopping', 'Recreation', etc.)
         poi_block_mapping: Optional pre-computed mapping of POI osm_id to block_id.
                           If provided, significantly speeds up POI density calculation.
+        geo_level: Census geography level of the survey location IDs —
+                   BaseSurveyTrip.GEO_BLOCK_GROUP (default) or BaseSurveyTrip.GEO_TRACT.
 
     Returns:
-        Combined OD matrix at block group level
+        Combined OD matrix at the geography level matching the survey.
     """
     logger.info("=" * 70)
     logger.info(f"CREATING NON-WORK OD MATRIX - {purpose.upper()}")
@@ -669,7 +685,8 @@ def create_nonwork_od_matrix(config: Dict[str, Any],
         purpose,
         config,
         survey_df,
-        beta=beta
+        beta=beta,
+        geo_level=geo_level,
     )
 
     if gravity_od_matrix.empty:

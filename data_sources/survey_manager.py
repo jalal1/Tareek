@@ -212,6 +212,51 @@ class SurveyManager:
                 )
         return result
 
+    @staticmethod
+    def detect_geo_level_from_df(df: pd.DataFrame) -> Optional[str]:
+        """Detect census geography level from non-null origin_loc values in a DataFrame.
+
+        Mirrors BaseSurveyTrip.detect_geo_level() but operates on an already-loaded
+        DataFrame rather than a live survey instance.  Used when data is loaded from
+        the database (where clean_data() is not re-run and metadata is not populated).
+
+        Returns:
+            A geo level constant from BaseSurveyTrip (e.g. 'block_group', 'tract'),
+            or None if all origin_loc values are null.
+
+        Raises:
+            ValueError: If GEOID lengths are non-uniform or the length is unrecognised.
+        """
+        o_col = BaseSurveyTrip.ORIGIN_LOC
+        if o_col not in df.columns:
+            return None
+
+        non_null = df[o_col].dropna()
+        non_null = non_null[non_null.astype(str).str.strip() != '']
+
+        if non_null.empty:
+            return None
+
+        lengths = non_null.astype(str).str.strip().str.len().unique()
+
+        if len(lengths) > 1:
+            raise ValueError(
+                f"detect_geo_level_from_df: non-uniform GEOID lengths in origin_loc: "
+                f"{sorted(lengths)}. Check for dirty data or mixed geography types."
+            )
+
+        length = int(lengths[0])
+        geo_level = BaseSurveyTrip.GEOID_LENGTH_TO_GEO_LEVEL.get(length)
+
+        if geo_level is None:
+            raise ValueError(
+                f"detect_geo_level_from_df: GEOID length {length} does not match any "
+                f"known census geography. Supported lengths: "
+                f"{list(BaseSurveyTrip.GEOID_LENGTH_TO_GEO_LEVEL.keys())}"
+            )
+
+        return geo_level
+
     # ── Single-source convenience methods ───────────────────────────────
 
     def get_single_source(self) -> Optional[BaseSurveyTrip]:

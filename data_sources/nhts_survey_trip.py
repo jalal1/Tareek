@@ -355,6 +355,9 @@ class NHTSSurveyTrip(BaseSurveyTrip):
             # ── Validate canonical schema ─────────────────────────────────
             self.validate_schema()
 
+            # ── Detect census geography level from origin_loc values ──────
+            self.detect_geo_level()
+
         except Exception as e:
             logger.error(f"Error cleaning NHTS data: {e}")
             raise

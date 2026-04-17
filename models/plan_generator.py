@@ -632,6 +632,7 @@ class _WorkerPlanGenerator(_BasePlanGenerator):
         # Get shared data
         self.blockid2homelocs = shared_data['blockid2homelocs']
         self.blockid2worklocs = shared_data['blockid2worklocs']
+        self.geo_level = shared_data.get('geo_level', BaseSurveyTrip.GEO_BLOCK_GROUP)
 
         # Re-initialize models with shared survey data
         survey_df = shared_data['survey_df']
@@ -787,7 +788,8 @@ class _WorkerPlanGenerator(_BasePlanGenerator):
             dest_bg,
             num_trips,
             self.blockid2homelocs,
-            self.blockid2worklocs
+            self.blockid2worklocs,
+            geo_level=self.geo_level,
         )
         # logger.info(f"process_od_pair(), len(samples):  {len(samples)}")
 
@@ -919,6 +921,12 @@ class PlanGenerator(_BasePlanGenerator):
         self.persons = self.survey_manager.get_persons()
         logger.info(f"  Loaded {len(self.survey_df)} survey trips")
         logger.info(f"  Processed {len(self.persons)} persons")
+
+        # Detect census geography level from survey location IDs
+        self.geo_level = SurveyManager.detect_geo_level_from_df(self.survey_df)
+        if self.geo_level is None:
+            self.geo_level = BaseSurveyTrip.GEO_BLOCK_GROUP
+        logger.info(f"  Detected survey geo level: {self.geo_level}")
 
         # Initialize models — blended wrappers when multiple sources are active
         logger.info("Initializing statistical models...")
@@ -1239,11 +1247,16 @@ class PlanGenerator(_BasePlanGenerator):
         return combined_matrix
 
     def _group_by_blockgroup(self, blockid_dict: Dict, is_home: bool = True) -> Dict:
-        """Group blocks by block group (first 12 chars) and calculate centroids.
+        """Group blocks by census geography zone and calculate centroids.
 
-        Note: Now uses lat/lon coordinates directly from the block data.
+        The aggregation level is determined by self.geo_level:
+          block_group → first 12 chars (default)
+          tract       → first 11 chars
         """
         from collections import defaultdict
+
+        _prefix_map = {BaseSurveyTrip.GEO_BLOCK_GROUP: 12, BaseSurveyTrip.GEO_TRACT: 11}
+        prefix_len = _prefix_map.get(self.geo_level, 12)
 
         bg_dict = defaultdict(lambda: {
             'n_employees': 0,
@@ -1251,7 +1264,7 @@ class PlanGenerator(_BasePlanGenerator):
         })
 
         for block_id, data in blockid_dict.items():
-            bg_id = block_id[:12]
+            bg_id = block_id[:prefix_len]
             bg_dict[bg_id]['n_employees'] += data.get('n_employees', 0)
 
             # Extract lat/lon coordinates (now stored directly in data)
@@ -1563,6 +1576,7 @@ class PlanGenerator(_BasePlanGenerator):
             'poi_data': poi_data,
             'chains_df': chains_df,  # Share pre-processed chains
             'gtfs_stop_data': self._serialize_gtfs_stop_data(),  # GTFS stop coords per mode
+            'geo_level': self.geo_level,
         }
 
         # Share unfiltered chain length distribution for single-source workers
@@ -1707,7 +1721,8 @@ class PlanGenerator(_BasePlanGenerator):
             dest_bg,
             num_trips,
             self.blockid2homelocs,
-            self.blockid2worklocs
+            self.blockid2worklocs,
+            geo_level=self.geo_level,
         )
 
         home_locs = samples['home_locations']

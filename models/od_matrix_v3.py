@@ -1,9 +1,15 @@
 import pandas as pd
 import numpy as np
 from scipy.spatial.distance import cdist
-from typing import Dict, List
+from typing import Dict, List, Optional
 from utils.logger import setup_logger
 from data_sources.base_survey_trip import BaseSurveyTrip
+
+# Maps geo level constant → number of GEOID characters used as the zone key
+_GEO_LEVEL_PREFIX_LEN: Dict[str, int] = {
+    BaseSurveyTrip.GEO_TRACT: 11,
+    BaseSurveyTrip.GEO_BLOCK_GROUP: 12,
+}
 
 logger = setup_logger(__name__)
 
@@ -54,30 +60,42 @@ def create_survey_od_matrix_using_trip_weight(df: pd.DataFrame):
 
     return od_matrix
 
-def aggregate_blocks_to_blockgroups(od_matrix: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aggregate an OD matrix from blocks (15 digits) to block groups (12 digits).
-    
+def aggregate_blocks_to_geo_level(od_matrix: pd.DataFrame,
+                                   geo_level: str = BaseSurveyTrip.GEO_BLOCK_GROUP) -> pd.DataFrame:
+    """Aggregate an OD matrix from blocks (15-digit) to the specified census geography.
+
     Args:
-        od_matrix (pd.DataFrame): OD matrix with 15-digit FIPS codes as index/columns.
-        
+        od_matrix: OD matrix with 15-digit block FIPS codes as index/columns.
+        geo_level: Target geography level — BaseSurveyTrip.GEO_BLOCK_GROUP (default)
+                   or BaseSurveyTrip.GEO_TRACT.
+
     Returns:
-        pd.DataFrame: Aggregated OD matrix with 12-digit block group FIPS codes.
+        Aggregated OD matrix whose index/columns are zone IDs at the requested level.
     """
-    # Extract first 12 digits from index and columns to get block group codes
-    bg_index = od_matrix.index.astype(str).str[:12]
-    bg_columns = od_matrix.columns.astype(str).str[:12]
-    
-    # Create a copy with block group codes
+    prefix_len = _GEO_LEVEL_PREFIX_LEN.get(geo_level)
+    if prefix_len is None:
+        logger.warning(
+            f"aggregate_blocks_to_geo_level: unknown geo_level '{geo_level}', "
+            f"falling back to block_group (prefix 12)"
+        )
+        prefix_len = 12
+
+    zone_index = od_matrix.index.astype(str).str[:prefix_len]
+    zone_columns = od_matrix.columns.astype(str).str[:prefix_len]
+
     temp_df = od_matrix.copy()
-    temp_df.index = bg_index
-    temp_df.columns = bg_columns
-    
-    # Aggregate: sum across rows (origins) then across columns (destinations)
-    agg_matrix = temp_df.groupby(level=0).sum()  # Sum rows with same origin BG
-    agg_matrix = agg_matrix.groupby(level=0, axis=1).sum()  # Sum columns with same destination BG
-    
+    temp_df.index = zone_index
+    temp_df.columns = zone_columns
+
+    agg_matrix = temp_df.groupby(level=0).sum()
+    agg_matrix = agg_matrix.T.groupby(level=0).sum().T
+
     return agg_matrix
+
+
+def aggregate_blocks_to_blockgroups(od_matrix: pd.DataFrame) -> pd.DataFrame:
+    """Backward-compatible alias for aggregate_blocks_to_geo_level (block_group level)."""
+    return aggregate_blocks_to_geo_level(od_matrix, geo_level=BaseSurveyTrip.GEO_BLOCK_GROUP)
 
 
 def blend_survey_od_matrices(survey_ods: Dict[str, pd.DataFrame],
@@ -507,7 +525,8 @@ def _allocate_samples(blocks_dict: Dict, total_samples: int,
 
 
 def generate_samples(bg_origin: str, bg_destination: str, num_trips: int,
-                    blockid2homelocs: Dict, blockid2worklocs: Dict) -> Dict:
+                    blockid2homelocs: Dict, blockid2worklocs: Dict,
+                    geo_level: str = BaseSurveyTrip.GEO_BLOCK_GROUP) -> Dict:
     """
     Generate home and work location samples for trips between two block groups.
 
@@ -519,13 +538,15 @@ def generate_samples(bg_origin: str, bg_destination: str, num_trips: int,
     distributions, not consumable capacity.
 
     Args:
-        bg_origin: Origin block group ID (12 chars)
-        bg_destination: Destination block group ID (12 chars)
+        bg_origin: Origin zone ID (length depends on geo_level — 11 for tract, 12 for block_group)
+        bg_destination: Destination zone ID (same)
         num_trips: Number of trips to generate
-        blockid2homelocs: Dict mapping block IDs to home location info
+        blockid2homelocs: Dict mapping block IDs (15-digit) to home location info
                          Must have keys: 'n_employees', 'lat', 'lon'
-        blockid2worklocs: Dict mapping block IDs to work location info
+        blockid2worklocs: Dict mapping block IDs (15-digit) to work location info
                          Must have keys: 'n_employees', 'lat', 'lon'
+        geo_level: Census geography level of the OD zone IDs — BaseSurveyTrip.GEO_BLOCK_GROUP
+                   (default) or BaseSurveyTrip.GEO_TRACT.
 
     Returns:
         {
@@ -541,11 +562,13 @@ def generate_samples(bg_origin: str, bg_destination: str, num_trips: int,
         >>> len(samples['work_locations'])
         100
     """
-    # Get all blocks in origin and destination BGs
+    prefix_len = _GEO_LEVEL_PREFIX_LEN.get(geo_level, 12)
+
+    # Get all blocks whose zone prefix matches the requested origin/destination zone
     origin_blocks = {bid: data for bid, data in blockid2homelocs.items()
-                     if bid[:12] == bg_origin}
+                     if bid[:prefix_len] == bg_origin}
     dest_blocks = {bid: data for bid, data in blockid2worklocs.items()
-                   if bid[:12] == bg_destination}
+                   if bid[:prefix_len] == bg_destination}
 
     if not origin_blocks or not dest_blocks:
         logger.warning(f"No blocks found for BG pair {bg_origin} -> {bg_destination}")

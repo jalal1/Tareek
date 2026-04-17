@@ -20,3 +20,9 @@ cache/
 *.p12
 secrets.json
 credentials.json
+
+# Cached data
+data/gtfs
+data/networks
+data/osm_cache
+data/pygris_cache
