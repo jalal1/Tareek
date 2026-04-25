@@ -54,6 +54,8 @@ Output goes to `experiments/<experiment-id>/`.
 
 Instead of editing JSON manually, you can use the Config Wizard to build a config file for any county in the US through an interactive web interface. Select counties on a map, configure modes, set scaling factors, and export a ready-to-use `config.json`.
 
+[Demo](https://www.youtube.com/watch?v=Vlc4IO8HXN4)
+
 ```bash
 cd webapp
 python run.py
