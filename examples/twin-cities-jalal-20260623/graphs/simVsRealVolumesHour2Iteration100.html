@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta http-equiv="Content-Script-Type" content="text/javascript"/>
+<meta http-equiv="Content-Style-Type" content="text/css"/>
+<title> MATSim validation </title>
+<script type="text/javascript" src="div/overlib.js"></script>
+<link rel="stylesheet" type="text/css" href="div/style1.css"/>
+</head>
+<body>
+<div id="overDiv" style="Z-INDEX: 1; POSITION: absolute"></div>
+<div id="header">
+<div id="logo">
+<img src="div/logo.png" width="224" height="52" style="border:none;" alt="logo"/><br>Multi-Agent Transport Simulation Toolkit
+</div>
+<h3>Counting Volumes</h3>
+</div>
+<div id="footer">
+23.
+6.
+2026	 
+exouser
+</div>
+<div id="links">
+<h3>sim and real volumes:<br /></h3><a href="simVsRealVolumesHour1Iteration100.html">hour: 1</a><br />
+<a href="simVsRealVolumesHour2Iteration100.html">hour: 2</a><br />
+<a href="simVsRealVolumesHour3Iteration100.html">hour: 3</a><br />
+<a href="simVsRealVolumesHour4Iteration100.html">hour: 4</a><br />
+<a href="simVsRealVolumesHour5Iteration100.html">hour: 5</a><br />
+<a href="simVsRealVolumesHour6Iteration100.html">hour: 6</a><br />
+<a href="simVsRealVolumesHour7Iteration100.html">hour: 7</a><br />
+<a href="simVsRealVolumesHour8Iteration100.html">hour: 8</a><br />
+<a href="simVsRealVolumesHour9Iteration100.html">hour: 9</a><br />
+<a href="simVsRealVolumesHour10Iteration100.html">hour: 10</a><br />
+<a href="simVsRealVolumesHour11Iteration100.html">hour: 11</a><br />
+<a href="simVsRealVolumesHour12Iteration100.html">hour: 12</a><br />
+<a href="simVsRealVolumesHour13Iteration100.html">hour: 13</a><br />
+<a href="simVsRealVolumesHour14Iteration100.html">hour: 14</a><br />
+<a href="simVsRealVolumesHour15Iteration100.html">hour: 15</a><br />
+<a href="simVsRealVolumesHour16Iteration100.html">hour: 16</a><br />
+<a href="simVsRealVolumesHour17Iteration100.html">hour: 17</a><br />
+<a href="simVsRealVolumesHour18Iteration100.html">hour: 18</a><br />
+<a href="simVsRealVolumesHour19Iteration100.html">hour: 19</a><br />
+<a href="simVsRealVolumesHour20Iteration100.html">hour: 20</a><br />
+<a href="simVsRealVolumesHour21Iteration100.html">hour: 21</a><br />
+<a href="simVsRealVolumesHour22Iteration100.html">hour: 22</a><br />
+<a href="simVsRealVolumesHour23Iteration100.html">hour: 23</a><br />
+<a href="simVsRealVolumesHour24Iteration100.html">hour: 24</a><br />
+<h3>errors:<br /></h3><a href="errors.html">errors</a><br />
+<a href="biasErrors.html">biasErrors</a><br />
+<h3>link volumes:<br /></h3><a href="link102886.html">link102886</a><br />
+<a href="link103323.html">link103323</a><br />
+<a href="link109783.html">link109783</a><br />
+<a href="link113976.html">link113976</a><br />
+<a href="link118471.html">link118471</a><br />
+<a href="link120450.html">link120450</a><br />
+<a href="link124592.html">link124592</a><br />
+<a href="link132947.html">link132947</a><br />
+<a href="link137440.html">link137440</a><br />
+<a href="link149608.html">link149608</a><br />
+<a href="link17842.html">link17842</a><br />
+<a href="link182997.html">link182997</a><br />
+<a href="link184708.html">link184708</a><br />
+<a href="link184805.html">link184805</a><br />
+<a href="link184806.html">link184806</a><br />
+<a href="link192350.html">link192350</a><br />
+<a href="link193768.html">link193768</a><br />
+<a href="link21327.html">link21327</a><br />
+<a href="link216638.html">link216638</a><br />
+<a href="link220059.html">link220059</a><br />
+<a href="link221155.html">link221155</a><br />
+<a href="link2220.html">link2220</a><br />
+<a href="link24596.html">link24596</a><br />
+<a href="link24632.html">link24632</a><br />
+<a href="link251590.html">link251590</a><br />
+<a href="link256197.html">link256197</a><br />
+<a href="link266168.html">link266168</a><br />
+<a href="link273233.html">link273233</a><br />
+<a href="link273234.html">link273234</a><br />
+<a href="link273580.html">link273580</a><br />
+<a href="link273628.html">link273628</a><br />
+<a href="link279370.html">link279370</a><br />
+<a href="link2867.html">link2867</a><br />
+<a href="link296940.html">link296940</a><br />
+<a href="link304090.html">link304090</a><br />
+<a href="link314887.html">link314887</a><br />
+<a href="link324718.html">link324718</a><br />
+<a href="link325449.html">link325449</a><br />
+<a href="link327078.html">link327078</a><br />
+<a href="link330203.html">link330203</a><br />
+<a href="link330960.html">link330960</a><br />
+<a href="link346143.html">link346143</a><br />
+<a href="link350001.html">link350001</a><br />
+<a href="link359576.html">link359576</a><br />
+<a href="link362774.html">link362774</a><br />
+<a href="link366598.html">link366598</a><br />
+<a href="link388817.html">link388817</a><br />
+<a href="link39132.html">link39132</a><br />
+<a href="link396159.html">link396159</a><br />
+<a href="link424822.html">link424822</a><br />
+<a href="link436126.html">link436126</a><br />
+<a href="link437753.html">link437753</a><br />
+<a href="link437849.html">link437849</a><br />
+<a href="link442423.html">link442423</a><br />
+<a href="link449002.html">link449002</a><br />
+<a href="link456448.html">link456448</a><br />
+<a href="link456898.html">link456898</a><br />
+<a href="link464961.html">link464961</a><br />
+<a href="link478972.html">link478972</a><br />
+<a href="link478973.html">link478973</a><br />
+<a href="link479057.html">link479057</a><br />
+<a href="link479639.html">link479639</a><br />
+<a href="link481082.html">link481082</a><br />
+<a href="link485401.html">link485401</a><br />
+<a href="link498942.html">link498942</a><br />
+<a href="link500373.html">link500373</a><br />
+<a href="link505330.html">link505330</a><br />
+<a href="link50648.html">link50648</a><br />
+<a href="link518418.html">link518418</a><br />
+<a href="link525557.html">link525557</a><br />
+<a href="link543038.html">link543038</a><br />
+<a href="link556282.html">link556282</a><br />
+<a href="link557307.html">link557307</a><br />
+<a href="link559300.html">link559300</a><br />
+<a href="link559393.html">link559393</a><br />
+<a href="link58756.html">link58756</a><br />
+<a href="link589221.html">link589221</a><br />
+<a href="link591375.html">link591375</a><br />
+<a href="link594011.html">link594011</a><br />
+<a href="link599453.html">link599453</a><br />
+<a href="link599475.html">link599475</a><br />
+<a href="link600152.html">link600152</a><br />
+<a href="link602210.html">link602210</a><br />
+<a href="link603866.html">link603866</a><br />
+<a href="link611478.html">link611478</a><br />
+<a href="link614318.html">link614318</a><br />
+<a href="link614815.html">link614815</a><br />
+<a href="link618468.html">link618468</a><br />
+<a href="link628070.html">link628070</a><br />
+<a href="link63099.html">link63099</a><br />
+<a href="link86860.html">link86860</a><br />
+<a href="link86871.html">link86871</a><br />
+<a href="link92394.html">link92394</a><br />
+<a href="link96910.html">link96910</a><br />
+<h3>average working day sim and count volumes:<br /></h3><a href="simVsRealVolumes24Iteration100.html">simVsRealVolumes24Iteration100</a><br />
+</div>
+<div id="contents">
+<p>
+<map id="chart" name="chart">
+<area shape="poly" coords="539,462,542,462,542,465,539,465,539,462,539,462" onMouseOver="return overlib('Link 24632; Count: 632.0, Sim: 5.300000000000001');" onMouseOut="return nd();" href="link24632.html"/>
+<area shape="poly" coords="533,436,536,436,536,439,533,439,533,436,533,436" onMouseOver="return overlib('Link 362774; Count: 580.0, Sim: 8.8');" onMouseOut="return nd();" href="link362774.html"/>
+<area shape="poly" coords="521,458,524,458,524,461,521,461,521,458,521,458" onMouseOver="return overlib('Link 96910; Count: 495.0, Sim: 5.699999999999999');" onMouseOut="return nd();" href="link96910.html"/>
+<area shape="poly" coords="515,398,518,398,518,401,515,401,515,398,515,398" onMouseOver="return overlib('Link 346143; Count: 457.0, Sim: 18.0');" onMouseOut="return nd();" href="link346143.html"/>
+<area shape="poly" coords="514,398,517,398,517,401,514,401,514,398,514,398" onMouseOver="return overlib('Link 525557; Count: 447.0, Sim: 18.2');" onMouseOut="return nd();" href="link525557.html"/>
+<area shape="poly" coords="513,449,516,449,516,452,513,452,513,449,513,449" onMouseOver="return overlib('Link 498942; Count: 444.0, Sim: 6.800000000000001');" onMouseOut="return nd();" href="link498942.html"/>
+<area shape="poly" coords="506,481,509,481,509,484,506,484,506,481,506,481" onMouseOver="return overlib('Link 456448; Count: 400.0, Sim: 3.7');" onMouseOut="return nd();" href="link456448.html"/>
+<area shape="poly" coords="502,421,505,421,505,424,502,424,502,421,502,421" onMouseOver="return overlib('Link 456898; Count: 382.0, Sim: 11.7');" onMouseOut="return nd();" href="link456898.html"/>
+<area shape="poly" coords="501,488,504,488,504,491,501,491,501,488,501,488" onMouseOver="return overlib('Link 102886; Count: 372.0, Sim: 3.2');" onMouseOut="return nd();" href="link102886.html"/>
+<area shape="poly" coords="497,423,500,423,500,426,497,426,497,423,497,423" onMouseOver="return overlib('Link 591375; Count: 355.0, Sim: 11.299999999999999');" onMouseOut="return nd();" href="link591375.html"/>
+<area shape="poly" coords="484,467,487,467,487,470,484,470,484,467,484,467" onMouseOver="return overlib('Link 296940; Count: 297.0, Sim: 4.8');" onMouseOut="return nd();" href="link296940.html"/>
+<area shape="poly" coords="481,457,484,457,484,460,481,460,481,457,481,457" onMouseOver="return overlib('Link 58756; Count: 284.0, Sim: 5.8999999999999995');" onMouseOut="return nd();" href="link58756.html"/>
+<area shape="poly" coords="478,477,481,477,481,480,478,480,478,477,478,477" onMouseOver="return overlib('Link 132947; Count: 271.0, Sim: 4.0');" onMouseOut="return nd();" href="link132947.html"/>
+<area shape="poly" coords="477,464,480,464,480,467,477,467,477,464,477,464" onMouseOver="return overlib('Link 24596; Count: 270.0, Sim: 5.1');" onMouseOut="return nd();" href="link24596.html"/>
+<area shape="poly" coords="470,408,473,408,473,411,470,411,470,408,470,408" onMouseOver="return overlib('Link 611478; Count: 244.0, Sim: 14.9');" onMouseOut="return nd();" href="link611478.html"/>
+<area shape="poly" coords="469,549,472,549,472,552,469,552,469,549,469,549" onMouseOver="return overlib('Link 273628; Count: 242.0, Sim: 1.0');" onMouseOut="return nd();" href="link273628.html"/>
+<area shape="poly" coords="468,452,471,452,471,455,468,455,468,452,468,452" onMouseOver="return overlib('Link 479639; Count: 239.0, Sim: 6.5');" onMouseOut="return nd();" href="link479639.html"/>
+<area shape="poly" coords="468,474,471,474,471,477,468,477,468,474,468,474" onMouseOver="return overlib('Link 2867; Count: 237.0, Sim: 4.2');" onMouseOut="return nd();" href="link2867.html"/>
+<area shape="poly" coords="465,445,468,445,468,448,465,448,465,445,465,445" onMouseOver="return overlib('Link 500373; Count: 227.0, Sim: 7.3');" onMouseOut="return nd();" href="link500373.html"/>
+<area shape="poly" coords="461,400,464,400,464,403,461,403,461,400,461,400" onMouseOver="return overlib('Link 63099; Count: 216.0, Sim: 17.4');" onMouseOut="return nd();" href="link63099.html"/>
+<area shape="poly" coords="455,430,458,430,458,433,455,433,455,430,455,430" onMouseOver="return overlib('Link 388817; Count: 198.0, Sim: 9.8');" onMouseOut="return nd();" href="link388817.html"/>
+<area shape="poly" coords="453,463,456,463,456,466,453,466,453,463,453,463" onMouseOver="return overlib('Link 124592; Count: 192.0, Sim: 5.2');" onMouseOut="return nd();" href="link124592.html"/>
+<area shape="poly" coords="452,508,455,508,455,511,452,511,452,508,452,508" onMouseOver="return overlib('Link 479057; Count: 191.0, Sim: 2.2');" onMouseOut="return nd();" href="link479057.html"/>
+<area shape="poly" coords="450,472,453,472,453,475,450,475,450,472,450,472" onMouseOver="return overlib('Link 330960; Count: 186.0, Sim: 4.4');" onMouseOut="return nd();" href="link330960.html"/>
+<area shape="poly" coords="445,422,448,422,448,425,445,425,445,422,445,422" onMouseOver="return overlib('Link 559393; Count: 174.0, Sim: 11.5');" onMouseOut="return nd();" href="link559393.html"/>
+<area shape="poly" coords="440,487,443,487,443,490,440,490,440,487,440,487" onMouseOver="return overlib('Link 2220; Count: 162.0, Sim: 3.3000000000000003');" onMouseOut="return nd();" href="link2220.html"/>
+<area shape="poly" coords="438,513,441,513,441,516,438,516,438,513,438,513" onMouseOver="return overlib('Link 120450; Count: 158.0, Sim: 2.0');" onMouseOut="return nd();" href="link120450.html"/>
+<area shape="poly" coords="421,471,424,471,424,474,421,474,421,471,421,471" onMouseOver="return overlib('Link 216638; Count: 125.0, Sim: 4.5');" onMouseOut="return nd();" href="link216638.html"/>
+<area shape="poly" coords="418,544,421,544,421,547,418,547,418,544,418,544" onMouseOver="return overlib('Link 557307; Count: 119.0, Sim: 1.1');" onMouseOut="return nd();" href="link557307.html"/>
+<area shape="poly" coords="417,466,420,466,420,469,417,469,417,466,417,466" onMouseOver="return overlib('Link 92394; Count: 117.0, Sim: 4.9');" onMouseOut="return nd();" href="link92394.html"/>
+<area shape="poly" coords="415,457,418,457,418,460,415,460,415,457,415,457" onMouseOver="return overlib('Link 614318; Count: 114.0, Sim: 5.8');" onMouseOut="return nd();" href="link614318.html"/>
+<area shape="poly" coords="412,531,415,531,415,534,412,534,412,531,412,531" onMouseOver="return overlib('Link 50648; Count: 110.0, Sim: 1.4000000000000001');" onMouseOut="return nd();" href="link50648.html"/>
+<area shape="poly" coords="405,518,408,518,408,521,405,521,405,518,405,518" onMouseOver="return overlib('Link 184708; Count: 100.0, Sim: 1.7999999999999998');" onMouseOut="return nd();" href="link184708.html"/>
+<area shape="poly" coords="302,501,305,501,305,504,302,504,302,501,302,501" onMouseOver="return overlib('Link 324718; Count: 24.0, Sim: 2.5');" onMouseOut="return nd();" href="link324718.html"/>
+</map>
+<img src="png/simVsRealVolumesHour2Iteration100.png" width="800" height="600" style="border:none;" alt="graph" usemap="#chart"/>
+</p>
+</div>
+</body>
+</html>

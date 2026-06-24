@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta http-equiv="Content-Script-Type" content="text/javascript"/>
+<meta http-equiv="Content-Style-Type" content="text/css"/>
+<title> MATSim validation </title>
+<script type="text/javascript" src="div/overlib.js"></script>
+<link rel="stylesheet" type="text/css" href="div/style1.css"/>
+</head>
+<body>
+<div id="overDiv" style="Z-INDEX: 1; POSITION: absolute"></div>
+<div id="header">
+<div id="logo">
+<img src="div/logo.png" width="224" height="52" style="border:none;" alt="logo"/><br>Multi-Agent Transport Simulation Toolkit
+</div>
+<h3>Counting Volumes</h3>
+</div>
+<div id="footer">
+23.
+6.
+2026	 
+exouser
+</div>
+<div id="links">
+<h3>sim and real volumes:<br /></h3><a href="simVsRealVolumesHour1Iteration100.html">hour: 1</a><br />
+<a href="simVsRealVolumesHour2Iteration100.html">hour: 2</a><br />
+<a href="simVsRealVolumesHour3Iteration100.html">hour: 3</a><br />
+<a href="simVsRealVolumesHour4Iteration100.html">hour: 4</a><br />
+<a href="simVsRealVolumesHour5Iteration100.html">hour: 5</a><br />
+<a href="simVsRealVolumesHour6Iteration100.html">hour: 6</a><br />
+<a href="simVsRealVolumesHour7Iteration100.html">hour: 7</a><br />
+<a href="simVsRealVolumesHour8Iteration100.html">hour: 8</a><br />
+<a href="simVsRealVolumesHour9Iteration100.html">hour: 9</a><br />
+<a href="simVsRealVolumesHour10Iteration100.html">hour: 10</a><br />
+<a href="simVsRealVolumesHour11Iteration100.html">hour: 11</a><br />
+<a href="simVsRealVolumesHour12Iteration100.html">hour: 12</a><br />
+<a href="simVsRealVolumesHour13Iteration100.html">hour: 13</a><br />
+<a href="simVsRealVolumesHour14Iteration100.html">hour: 14</a><br />
+<a href="simVsRealVolumesHour15Iteration100.html">hour: 15</a><br />
+<a href="simVsRealVolumesHour16Iteration100.html">hour: 16</a><br />
+<a href="simVsRealVolumesHour17Iteration100.html">hour: 17</a><br />
+<a href="simVsRealVolumesHour18Iteration100.html">hour: 18</a><br />
+<a href="simVsRealVolumesHour19Iteration100.html">hour: 19</a><br />
+<a href="simVsRealVolumesHour20Iteration100.html">hour: 20</a><br />
+<a href="simVsRealVolumesHour21Iteration100.html">hour: 21</a><br />
+<a href="simVsRealVolumesHour22Iteration100.html">hour: 22</a><br />
+<a href="simVsRealVolumesHour23Iteration100.html">hour: 23</a><br />
+<a href="simVsRealVolumesHour24Iteration100.html">hour: 24</a><br />
+<h3>errors:<br /></h3><a href="errors.html">errors</a><br />
+<a href="biasErrors.html">biasErrors</a><br />
+<h3>link volumes:<br /></h3><a href="link102886.html">link102886</a><br />
+<a href="link103323.html">link103323</a><br />
+<a href="link109783.html">link109783</a><br />
+<a href="link113976.html">link113976</a><br />
+<a href="link118471.html">link118471</a><br />
+<a href="link120450.html">link120450</a><br />
+<a href="link124592.html">link124592</a><br />
+<a href="link132947.html">link132947</a><br />
+<a href="link137440.html">link137440</a><br />
+<a href="link149608.html">link149608</a><br />
+<a href="link17842.html">link17842</a><br />
+<a href="link182997.html">link182997</a><br />
+<a href="link184708.html">link184708</a><br />
+<a href="link184805.html">link184805</a><br />
+<a href="link184806.html">link184806</a><br />
+<a href="link192350.html">link192350</a><br />
+<a href="link193768.html">link193768</a><br />
+<a href="link21327.html">link21327</a><br />
+<a href="link216638.html">link216638</a><br />
+<a href="link220059.html">link220059</a><br />
+<a href="link221155.html">link221155</a><br />
+<a href="link2220.html">link2220</a><br />
+<a href="link24596.html">link24596</a><br />
+<a href="link24632.html">link24632</a><br />
+<a href="link251590.html">link251590</a><br />
+<a href="link256197.html">link256197</a><br />
+<a href="link266168.html">link266168</a><br />
+<a href="link273233.html">link273233</a><br />
+<a href="link273234.html">link273234</a><br />
+<a href="link273580.html">link273580</a><br />
+<a href="link273628.html">link273628</a><br />
+<a href="link279370.html">link279370</a><br />
+<a href="link2867.html">link2867</a><br />
+<a href="link296940.html">link296940</a><br />
+<a href="link304090.html">link304090</a><br />
+<a href="link314887.html">link314887</a><br />
+<a href="link324718.html">link324718</a><br />
+<a href="link325449.html">link325449</a><br />
+<a href="link327078.html">link327078</a><br />
+<a href="link330203.html">link330203</a><br />
+<a href="link330960.html">link330960</a><br />
+<a href="link346143.html">link346143</a><br />
+<a href="link350001.html">link350001</a><br />
+<a href="link359576.html">link359576</a><br />
+<a href="link362774.html">link362774</a><br />
+<a href="link366598.html">link366598</a><br />
+<a href="link388817.html">link388817</a><br />
+<a href="link39132.html">link39132</a><br />
+<a href="link396159.html">link396159</a><br />
+<a href="link424822.html">link424822</a><br />
+<a href="link436126.html">link436126</a><br />
+<a href="link437753.html">link437753</a><br />
+<a href="link437849.html">link437849</a><br />
+<a href="link442423.html">link442423</a><br />
+<a href="link449002.html">link449002</a><br />
+<a href="link456448.html">link456448</a><br />
+<a href="link456898.html">link456898</a><br />
+<a href="link464961.html">link464961</a><br />
+<a href="link478972.html">link478972</a><br />
+<a href="link478973.html">link478973</a><br />
+<a href="link479057.html">link479057</a><br />
+<a href="link479639.html">link479639</a><br />
+<a href="link481082.html">link481082</a><br />
+<a href="link485401.html">link485401</a><br />
+<a href="link498942.html">link498942</a><br />
+<a href="link500373.html">link500373</a><br />
+<a href="link505330.html">link505330</a><br />
+<a href="link50648.html">link50648</a><br />
+<a href="link518418.html">link518418</a><br />
+<a href="link525557.html">link525557</a><br />
+<a href="link543038.html">link543038</a><br />
+<a href="link556282.html">link556282</a><br />
+<a href="link557307.html">link557307</a><br />
+<a href="link559300.html">link559300</a><br />
+<a href="link559393.html">link559393</a><br />
+<a href="link58756.html">link58756</a><br />
+<a href="link589221.html">link589221</a><br />
+<a href="link591375.html">link591375</a><br />
+<a href="link594011.html">link594011</a><br />
+<a href="link599453.html">link599453</a><br />
+<a href="link599475.html">link599475</a><br />
+<a href="link600152.html">link600152</a><br />
+<a href="link602210.html">link602210</a><br />
+<a href="link603866.html">link603866</a><br />
+<a href="link611478.html">link611478</a><br />
+<a href="link614318.html">link614318</a><br />
+<a href="link614815.html">link614815</a><br />
+<a href="link618468.html">link618468</a><br />
+<a href="link628070.html">link628070</a><br />
+<a href="link63099.html">link63099</a><br />
+<a href="link86860.html">link86860</a><br />
+<a href="link86871.html">link86871</a><br />
+<a href="link92394.html">link92394</a><br />
+<a href="link96910.html">link96910</a><br />
+<h3>average working day sim and count volumes:<br /></h3><a href="simVsRealVolumes24Iteration100.html">simVsRealVolumes24Iteration100</a><br />
+</div>
+<div id="contents">
+<p>
+<map id="chart" name="chart">
+<area shape="rect" coords="734,407,755,430" onMouseOver="return overlib('X: -22.2 Mean: 169.221 Median: -22.2 Min: -1,045.7 Max: 1,560.9 Q1: -180 Q3: 523.6 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="707,410,728,435" onMouseOver="return overlib('X: -74.05 Mean: -0.166 Median: -74.05 Min: -1,480.4 Max: 1,473.2 Q1: -352.5 Q3: 425.6 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="680,411,701,442" onMouseOver="return overlib('X: -177.75 Mean: -150.585 Median: -177.75 Min: -1,906.6 Max: 1,575.4 Q1: -559.5 Q3: 394 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="652,398,673,443" onMouseOver="return overlib('X: -185.1 Mean: -12.818 Median: -185.1 Min: -2,324.5 Max: 2,432.2 Q1: -591.3 Q3: 771.9 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="625,389,646,444" onMouseOver="return overlib('X: -103.65 Mean: 100.231 Median: -103.65 Min: -2,540.8 Max: 2,758.3 Q1: -616.2 Q3: 1,048.7 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="597,399,618,450" onMouseOver="return overlib('X: -172.5 Mean: -101.535 Median: -172.5 Min: -2,907.4 Max: 2,454.5 Q1: -786.6 Q3: 765 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="570,406,591,462" onMouseOver="return overlib('X: -365.2 Mean: -443.293 Median: -365.2 Min: -3,295.1 Max: 2,536.4 Q1: -1,136.2 Q3: 555.2 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="543,411,564,466" onMouseOver="return overlib('X: -457.2 Mean: -560.637 Median: -457.2 Min: -3,462.2 Max: 2,289.2 Q1: -1,280.2 Q3: 380.7 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="515,415,536,460" onMouseOver="return overlib('X: -290.1 Mean: -493.429 Median: -290.1 Min: -2,514.4 Max: 2,083.4 Q1: -1,079.7 Q3: 282.4 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="488,419,509,455" onMouseOver="return overlib('X: -311.1 Mean: -527.639 Median: -311.1 Min: -2,279.5 Max: 1,331.4 Q1: -964.6 Q3: 138.6 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="461,423,482,452" onMouseOver="return overlib('X: -311 Mean: -550.403 Median: -311 Min: -2,181.9 Max: 1,006.7 Q1: -856.1 Q3: 41.8 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="433,429,454,457" onMouseOver="return overlib('X: -518.45 Mean: -706.312 Median: -518.45 Min: -2,131.9 Max: 659.1 Q1: -1,019.5 Q3: -150.3 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="406,421,427,455" onMouseOver="return overlib('X: -432.55 Mean: -525.267 Median: -432.55 Min: -2,396.5 Max: 1,156.5 Q1: -948 Q3: 96.5 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="378,406,399,451" onMouseOver="return overlib('X: -240.9 Mean: -234.46 Median: -240.9 Min: -2,914.5 Max: 2,550 Q1: -851.2 Q3: 531.9 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="351,387,372,445" onMouseOver="return overlib('X: 54.7 Mean: 55.405 Median: 54.7 Min: -3,273 Max: 3,241.9 Q1: -657.4 Q3: 1,118 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="324,387,345,448" onMouseOver="return overlib('X: -5.35 Mean: 79.532 Median: -5.35 Min: -3,428.6 Max: 3,521.5 Q1: -744.8 Q3: 1,117.8 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="296,392,317,448" onMouseOver="return overlib('X: 13.05 Mean: 1.496 Median: 13.05 Min: -3,307.2 Max: 3,064.4 Q1: -745.8 Q3: 971.9 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="269,385,290,445" onMouseOver="return overlib('X: 73.85 Mean: 300.754 Median: 73.85 Min: -3,113.9 Max: 3,640.4 Q1: -643.4 Q3: 1,167.2 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="242,388,263,437" onMouseOver="return overlib('X: 99.65 Mean: 317.434 Median: 99.65 Min: -2,382 Max: 2,384.2 Q1: -406 Q3: 1,089.3 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="214,420,235,432" onMouseOver="return overlib('X: -99.05 Mean: -65.148 Median: -99.05 Min: -763 Max: 583.9 Q1: -250.4 Q3: 114.7 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="187,426,208,430" onMouseOver="return overlib('X: -139.75 Mean: -147.698 Median: -139.75 Min: -377.9 Max: 39 Q1: -201.4 Q3: -68.4 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="159,427,180,431" onMouseOver="return overlib('X: -146 Mean: -162.051 Median: -146 Min: -417.7 Max: -4.2 Q1: -219.4 Q3: -82.9 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="132,428,153,433" onMouseOver="return overlib('X: -183.5 Mean: -207.62 Median: -183.5 Min: -489.3 Max: -16 Q1: -265 Q3: -108.2 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="105,429,126,436" onMouseOver="return overlib('X: -255 Mean: -311.083 Median: -255 Min: -752 Max: -17 Q1: -394 Q3: -154.8 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="734,165,755,251" onMouseOver="return overlib('X: -7.367 Mean: 35.242 Median: -7.367 Min: -100 Max: 351.343 Q1: -58.194 Q3: 107.302 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="707,192,728,249" onMouseOver="return overlib('X: -16.351 Mean: 4.663 Median: -16.351 Min: -100 Max: 217.607 Q1: -54.753 Q3: 55.928 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="680,204,701,253" onMouseOver="return overlib('X: -27.836 Mean: -9.745 Median: -27.836 Min: -99.698 Max: 156.812 Q1: -60.73 Q3: 33.127 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="652,192,673,252" onMouseOver="return overlib('X: -18.297 Mean: -0.608 Median: -18.297 Min: -100 Max: 177.544 Q1: -59.441 Q3: 55.492 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="625,189,646,251" onMouseOver="return overlib('X: -12.016 Mean: 3.75 Median: -12.016 Min: -100 Max: 222.087 Q1: -57.171 Q3: 62.598 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="597,201,618,250" onMouseOver="return overlib('X: -12.496 Mean: -6.82 Median: -12.496 Min: -100 Max: 166.388 Q1: -56.956 Q3: 38.371 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="570,212,591,253" onMouseOver="return overlib('X: -20.18 Mean: -19.555 Median: -20.18 Min: -99.845 Max: 125.439 Q1: -60.243 Q3: 18.085 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="543,215,564,250" onMouseOver="return overlib('X: -21.891 Mean: -22.194 Median: -21.891 Min: -99.723 Max: 97.224 Q1: -56.127 Q3: 11.739 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="515,216,536,250" onMouseOver="return overlib('X: -17.29 Mean: -21.14 Median: -17.29 Min: -99.923 Max: 84.109 Q1: -56.886 Q3: 9.888 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="488,219,509,247" onMouseOver="return overlib('X: -13.641 Mean: -22.729 Median: -13.641 Min: -99.982 Max: 79.674 Q1: -48.762 Q3: 5.028 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="461,221,482,243" onMouseOver="return overlib('X: -15.671 Mean: -25.124 Median: -15.671 Min: -99.826 Max: 66.192 Q1: -42.821 Q3: 0.942 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="433,226,454,247" onMouseOver="return overlib('X: -28.045 Mean: -32.109 Median: -28.045 Min: -99.99 Max: 47.605 Q1: -50.964 Q3: -9.122 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="406,218,427,249" onMouseOver="return overlib('X: -25.017 Mean: -26.357 Median: -25.017 Min: -99.917 Max: 57.867 Q1: -52.675 Q3: 6.657 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="378,209,399,249" onMouseOver="return overlib('X: -15.507 Mean: -15.229 Median: -15.507 Min: -99.914 Max: 114.941 Q1: -54.208 Q3: 23.215 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="351,197,372,248" onMouseOver="return overlib('X: 2.136 Mean: 0.374 Median: 2.136 Min: -100 Max: 173.129 Q1: -53.102 Q3: 46.059 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="324,199,345,252" onMouseOver="return overlib('X: 0.658 Mean: 5.238 Median: 0.658 Min: -100 Max: 189.4 Q1: -59.314 Q3: 42.037 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="296,202,317,253" onMouseOver="return overlib('X: 0.361 Mean: 1.603 Median: 0.361 Min: -100 Max: 162.536 Q1: -61.749 Q3: 36.99 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="269,191,290,256" onMouseOver="return overlib('X: 3.518 Mean: 13.698 Median: 3.518 Min: -100 Max: 227.058 Q1: -66.114 Q3: 58.04 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="242,179,263,257" onMouseOver="return overlib('X: 11.875 Mean: 29.934 Median: 11.875 Min: -100 Max: 245.714 Q1: -69.115 Q3: 80.252 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="214,210,235,262" onMouseOver="return overlib('X: -36.685 Mean: -11.827 Median: -36.685 Min: -100 Max: 154.361 Q1: -76.959 Q3: 22.411 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="187,251,208,270" onMouseOver="return overlib('X: -76.798 Mean: -69.686 Median: -76.798 Min: -100 Max: -1.298 Q1: -93.134 Q3: -55.735 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="159,268,180,273" onMouseOver="return overlib('X: -95.418 Mean: -92.722 Median: -95.418 Min: -100 Max: -77.5 Q1: -99.845 Q3: -89.865 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="132,273,153,274" onMouseOver="return overlib('X: -100 Mean: -98.919 Median: -100 Min: -100 Max: -96.4 Q1: -100 Q3: -98.483 ');" onMouseOut="return nd();" nohref="nohref"/>
+<area shape="rect" coords="105,274,126,275" onMouseOver="return overlib('X: -100 Mean: -99.352 Median: -100 Min: -100 Max: -100 Q1: -100 Q3: -100 ');" onMouseOut="return nd();" nohref="nohref"/>
+</map>
+<img src="png/errors.png" width="800" height="600" style="border:none;" alt="graph" usemap="#chart"/>
+</p>
+</div>
+</body>
+</html>

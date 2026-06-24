@@ -1,0 +1,151 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!DOCTYPE config SYSTEM "http://www.matsim.org/files/dtd/config_v2.dtd">
+<config>
+    <module name="controller">
+        <param name="lastIteration" value="100" />
+        <param name="outputDirectory" value="output" />
+        <param name="overwriteFiles" value="deleteDirectoryIfExists" />
+        <param name="mobsim" value="hermes" />
+    </module>
+    <module name="global">
+        <param name="coordinateSystem" value="EPSG:26915" />
+        <param name="numberOfThreads" value="30" />
+    </module>
+    <module name="linkStats">
+        <param name="averageLinkStatsOverIterations" value="2" />
+        <param name="writeLinkStatsInterval" value="100" />
+    </module>
+    <module name="counts">
+        <param name="inputCountsFile" value="counts.xml" />
+        <param name="countsScaleFactor" value="10.0" />
+        <param name="outputformat" value="all" />
+        <param name="averageCountsOverIterations" value="100" />
+        <param name="writeCountsInterval" value="100" />
+    </module>
+    <module name="network">
+        <param name="inputNetworkFile" value="network.xml" />
+    </module>
+    <module name="plans">
+        <param name="inputPlansFile" value="plans.xml" />
+    </module>
+    <module name="qsim">
+        <param name="flowCapacityFactor" value="0.1" />
+        <param name="storageCapacityFactor" value="0.12" />
+        <param name="numberOfThreads" value="30" />
+    </module>
+    <module name="hermes">
+        <param name="flowCapacityFactor" value="0.1" />
+        <param name="storageCapacityFactor" value="0.12" />
+    </module>
+    <module name="replanning">
+        <param name="fractionOfIterationsToDisableInnovation" value="0.8" />
+        <parameterset type="strategysettings">
+            <param name="strategyName" value="SelectExpBeta" />
+            <param name="weight" value="0.6" />
+        </parameterset>
+        <parameterset type="strategysettings">
+            <param name="strategyName" value="ReRoute" />
+            <param name="weight" value="0.2" />
+        </parameterset>
+        <parameterset type="strategysettings">
+            <param name="strategyName" value="TimeAllocationMutator" />
+            <param name="weight" value="0.1" />
+        </parameterset>
+        <parameterset type="strategysettings">
+            <param name="strategyName" value="SubtourModeChoice" />
+            <param name="weight" value="0.1" />
+        </parameterset>
+    </module>
+    <module name="subtourModeChoice">
+        <param name="modes" value="car,pt,walk" />
+        <param name="chainBasedModes" value="car" />
+        <param name="considerCarAvailability" value="true" />
+    </module>
+    <module name="scoring">
+        <param name="fractionOfIterationsToStartScoreMSA" value="0.8" />
+        <parameterset type="scoringParameters">
+            <parameterset type="activityParams">
+                <param name="activityType" value="Work" />
+                <param name="minimalDuration" value="06:00:00" />
+                <param name="typicalDuration" value="08:00:00" />
+                <param name="openingTime" value="06:00:00" />
+                <param name="closingTime" value="20:00:00" />
+            </parameterset>
+            <parameterset type="activityParams">
+                <param name="activityType" value="Shopping" />
+                <param name="minimalDuration" value="00:15:00" />
+                <param name="typicalDuration" value="00:45:00" />
+                <param name="openingTime" value="06:00:00" />
+                <param name="closingTime" value="23:00:00" />
+            </parameterset>
+            <parameterset type="activityParams">
+                <param name="activityType" value="School" />
+                <param name="minimalDuration" value="00:12:00" />
+                <param name="typicalDuration" value="02:30:00" />
+                <param name="openingTime" value="07:00:00" />
+                <param name="closingTime" value="17:00:00" />
+            </parameterset>
+            <parameterset type="activityParams">
+                <param name="activityType" value="Dining" />
+                <param name="minimalDuration" value="00:20:00" />
+                <param name="typicalDuration" value="01:00:00" />
+                <param name="openingTime" value="06:00:00" />
+                <param name="closingTime" value="23:00:00" />
+            </parameterset>
+            <parameterset type="activityParams">
+                <param name="activityType" value="Escort" />
+                <param name="minimalDuration" value="00:00:00" />
+                <param name="typicalDuration" value="01:00:00" />
+                <param name="openingTime" value="06:00:00" />
+                <param name="closingTime" value="22:00:00" />
+                <param name="latestStartTime" value="20:00:00" />
+            </parameterset>
+            <parameterset type="activityParams">
+                <param name="activityType" value="Other" />
+                <param name="minimalDuration" value="01:00:00" />
+                <param name="typicalDuration" value="02:00:00" />
+                <param name="openingTime" value="06:00:00" />
+                <param name="closingTime" value="22:00:00" />
+                <param name="latestStartTime" value="20:00:00" />
+            </parameterset>
+            <parameterset type="activityParams">
+                <param name="activityType" value="Home" />
+                <param name="minimalDuration" value="08:00:00" />
+                <param name="typicalDuration" value="12:00:00" />
+            </parameterset>
+            <parameterset type="activityParams">
+                <param name="activityType" value="Social" />
+                <param name="minimalDuration" value="00:16:00" />
+                <param name="typicalDuration" value="01:00:00" />
+                <param name="openingTime" value="08:00:00" />
+                <param name="closingTime" value="24:00:00" />
+                <param name="latestStartTime" value="22:00:00" />
+            </parameterset>
+            <parameterset type="modeParams">
+                <param name="mode" value="car" />
+            </parameterset>
+            <parameterset type="modeParams">
+                <param name="mode" value="pt" />
+                <param name="constant" value="1.5" />
+            </parameterset>
+            <parameterset type="modeParams">
+                <param name="mode" value="walk" />
+                <param name="constant" value="-1.0" />
+            </parameterset>
+            <param name="waitingPt" value="-1.0" />
+        </parameterset>
+    </module>
+    <module name="transitRouter">
+        <param name="additionalTransferTime" value="0.0" />
+        <param name="directWalkFactor" value="1.5" />
+        <param name="extensionRadius" value="200.0" />
+        <param name="maxBeelineWalkConnectionDistance" value="300.0" />
+        <param name="searchRadius" value="1200.0" />
+    </module>
+    <module name="transit">
+        <param name="useTransit" value="true" />
+        <param name="transitScheduleFile" value="transitSchedule.xml" />
+        <param name="vehiclesFile" value="transitVehicles.xml" />
+        <param name="transitModes" value="pt" />
+    </module>
+</config>
