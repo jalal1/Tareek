@@ -21,12 +21,34 @@ cache/
 secrets.json
 credentials.json
 
+# Local-only connection details (SSH passphrases, hosts). Never commit.
+.ssh_local/
+*.passphrase
+ssh_local.txt
+
 # Cached data
 data/gtfs
 data/networks
 data/osm_cache
 data/pygris_cache
 
+# Databases — never commit these. They are large and carry real data.
+*.duckdb
+*.duckdb.wal
+data/db/
+jetstream_server_db/
+
 # Stray/nested duckdb copies and lock files
 data/db/db/
 *.duckdb.lock
+
+# Local scratch artefacts (leading underscore marks a throwaway)
+data/_*
+*.tmp
+
+# Private working notes. These carry peer-review correspondence, reviewer
+# scores and unpublished measurements, none of which belong in a public repo.
+# The .drawio figures are held back until they are finished; the intent is to
+# publish rendered PDFs rather than the editable sources.
+REVIEW_ACTION_ITEMS.txt
+docs/od_matrix/
