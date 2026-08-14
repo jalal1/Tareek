@@ -39,6 +39,63 @@ DIR_TO_BEARING = {1: 0.0, 3: 90.0, 5: 180.0, 7: 270.0}
 # Opposite direction pairs (used to assign the two carriageways of a sensor jointly).
 OPPOSITE_DIRS = {1: 5, 5: 1, 3: 7, 7: 3}
 
+# ── Facility-class matching (HPMS f_system) ──────────────────────────────────
+# TMAS station records carry an HPMS functional system code, e.g. "1U" = urban
+# Interstate, "3R" = rural minor arterial. The leading digit is the functional
+# system; the trailing letter is the urban/rural flag.
+#
+#   1 Interstate            2 Principal arterial - freeway/expressway
+#   3 Principal arterial - other                 4 Minor arterial
+#   5 Major collector       6 Minor collector    7 Local
+#
+# Nearest-link matching alone puts Interstate sensors on parallel frontage
+# roads and ramps: the sensor coordinate can land a few metres closer to a
+# service road than to the mainline it actually measures. A 1-lane, 600 veh/h
+# service road then absorbs a count of 60,000 vehicles/day and simulates ~0.
+#
+# FHWA references count stations by route + milepoint precisely to avoid this
+# (HPMS Field Manual); with only coordinates available we approximate that
+# linkage by requiring the matched link to be plausible for the station's
+# functional class. Per-lane capacity and free-flow speed are the only class
+# signals the MATSim network preserves (OSM highway= tags do not survive
+# conversion), and they separate facility classes cleanly:
+# freeway-grade links carry ~2000 veh/h/lane at >= 24 m/s, while service roads
+# and local streets sit at 600 veh/h/lane and ~11 m/s.
+#
+# Each entry is (min_total_capacity, min_freespeed_mps) that a link must meet
+# to be an acceptable match for that functional system. Thresholds are set
+# below the true facility floor so legitimately-modest modelled links still
+# qualify — the goal is to exclude the frontage road, not to demand a perfect
+# capacity match.
+FSYSTEM_MIN_LINK = {
+    1: (1800.0, 20.0),   # Interstate: multi-lane, grade-separated
+    2: (1800.0, 20.0),   # Principal arterial - freeway/expressway
+    3: (1000.0, 13.0),   # Principal arterial - other
+    4: (1000.0, 11.0),   # Minor arterial
+}
+# Functional systems 5-7 (collectors, local roads) get no constraint: at that
+# class the sensor really is on an ordinary street and nearest-link is correct.
+
+# Radius searched for facility-class-compatible candidates. The mainline sat
+# 26-28 m from the sensor in the observed failures while the frontage road sat
+# at 0 m, so this must comfortably exceed a carriageway separation without
+# reaching an unrelated parallel road.
+CLASS_MATCH_RADIUS_M = 60.0
+
+
+def parse_f_system(f_system) -> Optional[int]:
+    """Leading functional-system digit of an HPMS f_system code.
+
+    Accepts "1U", "3R", "1", 1 — returns None for blank/unparseable values so
+    callers fall back to unconstrained matching.
+    """
+    if f_system is None:
+        return None
+    s = str(f_system).strip()
+    if not s or not s[0].isdigit():
+        return None
+    return int(s[0])
+
 
 class CountsGenerator:
     """Generate MATSim counts.xml from FHA and/or custom traffic count data."""
@@ -70,6 +127,7 @@ class CountsGenerator:
         self.spatial_index = None
         self.link_geometries = None
         self._link_endpoints = {}  # link_id -> (from_x, from_y, to_x, to_y)
+        self._link_attributes = {}  # link_id -> (capacity, freespeed)
         self._reverse_node_index = None  # {(to_node, from_node): link_id}
 
         # Coordinate transformer (WGS84 to UTM)
@@ -83,7 +141,8 @@ class CountsGenerator:
         Load FHA stations from the database.
 
         Returns:
-            DataFrame with columns: LOCAL_ID, Latitude, Longitude, Directions, source
+            DataFrame with columns: LOCAL_ID, Latitude, Longitude, Directions,
+            f_system, source
         """
         if self.db_manager is None:
             logger.warning("No db_manager — cannot load FHA stations")
@@ -102,6 +161,9 @@ class CountsGenerator:
                 'Latitude': s.lat,
                 'Longitude': s.lon,
                 'Directions': str(s.travel_dir),
+                # HPMS functional system — constrains which links this station
+                # may match to (see FSYSTEM_MIN_LINK).
+                'f_system': getattr(s, 'f_system', None),
                 'source': 'fha',
             })
         return pd.DataFrame(records)
@@ -263,6 +325,7 @@ class CountsGenerator:
 
         links_data = []
         link_geometries = {}
+        link_attributes = {}
 
         for link in root.findall('.//link'):
             link_id = link.get('id')
@@ -284,6 +347,13 @@ class CountsGenerator:
                 })
 
                 link_geometries[link_id] = LineString([(from_x, from_y), (to_x, to_y)])
+                # Capacity/freespeed drive facility-class matching; missing or
+                # malformed values become 0 so the link fails any class floor.
+                try:
+                    link_attributes[link_id] = (float(link.get('capacity') or 0.0),
+                                                float(link.get('freespeed') or 0.0))
+                except (TypeError, ValueError):
+                    link_attributes[link_id] = (0.0, 0.0)
 
         links_df = pd.DataFrame(links_data)
 
@@ -298,6 +368,7 @@ class CountsGenerator:
         self.network_links = links_df
         self.spatial_index = spatial_idx
         self.link_geometries = link_geometries
+        self._link_attributes = link_attributes
         # link_id -> {from_x, from_y, to_x, to_y} for O(1) bearing lookups.
         self._link_endpoints = {
             r['link_id']: (r['from_x'], r['from_y'], r['to_x'], r['to_y'])
@@ -430,6 +501,97 @@ class CountsGenerator:
         if nearest_any is not None:
             return nearest_any[1], nearest_any[0], 'fallback_nearest'
         return None, float('inf'), 'none'
+
+    # ── Facility-class-aware candidate selection ─────────────────────────────
+
+    def _link_attrs(self, link_id: str) -> Tuple[float, float]:
+        """(capacity, freespeed) for a link, or (0, 0) when unknown."""
+        attrs = self._link_attributes.get(str(link_id))
+        if attrs is None:
+            return 0.0, 0.0
+        return attrs
+
+    def link_matches_fsystem(self, link_id: str, fsys: Optional[int]) -> bool:
+        """Whether a link is a plausible facility for an HPMS functional system.
+
+        Returns True when *fsys* is None/unconstrained (functional systems 5-7,
+        or a station with no usable f_system), so behaviour is unchanged wherever
+        the class signal is absent.
+        """
+        req = FSYSTEM_MIN_LINK.get(fsys) if fsys is not None else None
+        if req is None:
+            return True
+        min_cap, min_speed = req
+        cap, freespeed = self._link_attrs(link_id)
+        return cap >= min_cap and freespeed >= min_speed
+
+    def find_station_carriageways(self, x: float, y: float,
+                                  fsys: Optional[int],
+                                  radius_m: float = CLASS_MATCH_RADIUS_M
+                                  ) -> Tuple[List[str], float, str]:
+        """Find the carriageway links a station's road is represented by.
+
+        Unlike plain nearest-link matching, this searches every link within
+        *radius_m* and keeps only those plausible for the station's functional
+        class, so an Interstate sensor cannot bind to the frontage road it
+        happens to sit closest to.
+
+        Returns:
+            (candidate_link_ids, distance_m, method) where method is
+            'class' when the facility-class filter selected the road,
+            'nearest' when no class constraint applied, or
+            'none' when nothing suitable was found.
+        """
+        point = Point(x, y)
+        nearby = self._nearby_link_ids(x, y, buffer_m=radius_m)
+        if not nearby:
+            return [], float('inf'), 'none'
+
+        # Rank every nearby link by distance once; reused by both branches.
+        ranked = sorted(
+            ((point.distance(self.link_geometries[lid]), lid) for lid in nearby),
+            key=lambda dl: dl[0],
+        )
+
+        constrained = FSYSTEM_MIN_LINK.get(fsys) is not None if fsys is not None else False
+        if constrained:
+            eligible = [(d, lid) for d, lid in ranked
+                        if self.link_matches_fsystem(lid, fsys)]
+            if not eligible:
+                return [], ranked[0][0], 'none'
+            method = 'class'
+        else:
+            eligible = ranked
+            method = 'nearest'
+
+        best_dist, best_id = eligible[0]
+
+        # The two carriageways are the chosen link plus its antiparallel
+        # partner. Take the partner from the eligible set as well, so both
+        # directions are measured on the same physical facility.
+        candidates = [best_id]
+        partner = self.get_reverse_link_id(best_id)
+        if partner and partner != best_id and (not constrained
+                                               or self.link_matches_fsystem(partner, fsys)):
+            candidates.append(partner)
+        else:
+            # No usable reverse from the node/suffix rules: fall back to the
+            # closest eligible link pointing the opposite way.
+            bx, by, tx, ty = self._link_endpoints[best_id]
+            best_bearing = self._link_bearing(bx, by, tx, ty)
+            if best_bearing is not None:
+                for d, lid in eligible:
+                    if lid == best_id:
+                        continue
+                    fx, fy, ltx, lty = self._link_endpoints[lid]
+                    b = self._link_bearing(fx, fy, ltx, lty)
+                    if b is None:
+                        continue
+                    if self._angular_diff(b, best_bearing) >= 135.0:
+                        candidates.append(lid)
+                        break
+
+        return candidates, best_dist, method
 
     def get_reverse_link_id(self, link_id: str) -> Optional[str]:
         """
@@ -592,20 +754,24 @@ class CountsGenerator:
 
     def match_fha_directional_to_links(self, ground_truth: pd.DataFrame,
                                        device_locations: pd.DataFrame) -> pd.DataFrame:
-        """Match FHA per-direction devices to links — proximity first, then bearing.
+        """Match FHA per-direction devices to links — facility class, then bearing.
 
         A physical sensor sits ON one road, so the two travel directions are the
-        two antiparallel carriageways of the NEAREST link, not just any link with
-        a matching bearing. For each station:
-          1. find the nearest link (carriageway A) and its reverse (carriageway B);
-          2. assign each FHA travel_dir to whichever of {A, B} has the closest
+        two antiparallel carriageways of that road. For each station:
+          1. find the carriageways of the road the station actually measures,
+             constrained by its HPMS functional class so an Interstate sensor
+             cannot bind to a parallel frontage road or ramp;
+          2. assign each FHA travel_dir to whichever carriageway has the closest
              bearing to that direction's compass heading;
           3. if only one carriageway exists (no antiparallel), keep the
-             higher-volume direction on it and drop + log the other.
+             higher-volume direction on it and drop + log the other;
+          4. if no link near the station is plausible for its functional class,
+             drop the station entirely rather than score it against the wrong
+             road — a mismatched station contributes pure noise to validation.
 
-        Bearing is used only to decide which carriageway is which direction — it
-        never overrides proximity, so a far-away but perfectly-aligned link can't
-        win over the road the sensor is actually on.
+        Bearing decides which carriageway is which direction; it never selects
+        the road itself, so a far-away but perfectly-aligned link cannot win over
+        the facility the sensor is on.
 
         Returns a DataFrame with one row per assigned direction, columns:
         LOCAL_ID, station_base, travel_dir, H01..H24, Latitude, Longitude,
@@ -624,7 +790,8 @@ class CountsGenerator:
             df['utm_y'] = utm_coords.apply(lambda c: c[1])
 
         results = []
-        n_assigned = n_dropped = 0
+        n_assigned = n_dropped = n_class_dropped = 0
+        n_class_matched = 0
 
         for station_base, grp in df.groupby('station_base'):
             rows = list(grp.iterrows())
@@ -636,21 +803,27 @@ class CountsGenerator:
 
             x = rows[0][1]['utm_x']
             y = rows[0][1]['utm_y']
+            fsys = parse_f_system(rows[0][1].get('f_system'))
 
-            # Carriageways = nearest link + its antiparallel reverse.
-            nearest_id, nearest_dist = self.find_nearest_link(x, y)
-            if nearest_id is None:
+            # Carriageways of the facility this station measures, constrained
+            # by its functional class.
+            candidates, nearest_dist, method = self.find_station_carriageways(x, y, fsys)
+            if not candidates:
                 for _, row in rows:
                     n_dropped += 1
-                    logger.info(f"FHA: station {station_base} dir "
-                                f"{int(row['travel_dir'])}: no nearby link — dropped")
+                    if method == 'none' and fsys is not None:
+                        n_class_dropped += 1
+                        logger.warning(
+                            f"FHA: station {station_base} dir {int(row['travel_dir'])}: "
+                            f"no link within {CLASS_MATCH_RADIUS_M:.0f} m is plausible for "
+                            f"functional system {fsys} (nearest link {nearest_dist:.1f} m "
+                            f"away is too small) — dropped from validation")
+                    else:
+                        logger.info(f"FHA: station {station_base} dir "
+                                    f"{int(row['travel_dir'])}: no nearby link — dropped")
                 continue
-            reverse_id = self.get_reverse_link_id(nearest_id)
-
-            # Candidate links with their bearings.
-            candidates = [nearest_id]
-            if reverse_id and reverse_id != nearest_id:
-                candidates.append(reverse_id)
+            if method == 'class':
+                n_class_matched += 1
 
             def _bearing_of(lid):
                 fx, fy, tx, ty = self._link_endpoints[lid]
@@ -675,13 +848,22 @@ class CountsGenerator:
                 rec = row.to_dict()
                 rec['matched_link_id'] = best
                 rec['distance_m'] = nearest_dist
-                rec['reverse_link_id'] = self.get_reverse_link_id(best)
+                rec['match_method'] = method
+                # Report the sibling carriageway actually used for this station,
+                # so matched_devices.csv reflects the assignment that was made.
+                sibling = [c for c in candidates if c != best]
+                rec['reverse_link_id'] = (sibling[0] if sibling
+                                          else self.get_reverse_link_id(best))
                 results.append(rec)
                 taken.add(best)
                 n_assigned += 1
 
         logger.info(f"FHA directional matching: {n_assigned} assigned, "
-                    f"{n_dropped} dropped (no distinct carriageway)")
+                    f"{n_dropped} dropped ({n_class_dropped} for facility-class "
+                    f"mismatch, rest no distinct carriageway)")
+        if n_class_matched:
+            logger.info(f"FHA: {n_class_matched} stations matched via HPMS "
+                        f"functional-class constraint")
 
         if not results:
             return pd.DataFrame()

@@ -16,7 +16,10 @@ from shapely import STRtree
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.lines import Line2D
 import matplotlib.patches as mpatches
+import matplotlib.patheffects as pe
+import matplotlib.transforms as transforms
 
 from utils.logger import setup_logger
 
@@ -29,9 +32,28 @@ class SimulationEvaluator:
     # Google-Maps-style traffic colormap: green → yellow → orange → dark red
     TRAFFIC_COLORS = ['#2ECC40', '#FFDC00', '#FF851B', "#FF0000"]
 
+    # Resolution for the per-hour figures. These are drawn once per hour — 24
+    # of them per family — so the cost is paid 24 times over, and the report
+    # downscales every image to 1400 px wide when it embeds them. At the 14 in
+    # figure width used here, 110 dpi already exceeds that, so rendering at the
+    # old 300 dpi (4200 px) spent time and ~3.6 MB per figure on pixels that
+    # were thrown away before anyone saw them.
+    #
+    # Whole-day figures keep their higher resolution: there are only a handful
+    # of them and they are the ones likely to be opened full-size or printed.
+    HOUR_FIGURE_DPI = 110
+
     # Congestion thresholds (speed/freespeed ratio boundaries)
     # [severe/congested, congested/moderate, moderate/free_flow]
-    CONGESTION_THRESHOLDS = [0.3, 0.4, 0.7]
+    #
+    # Below 50% of free-flow speed is severe, 50-75% congested, 75-90%
+    # moderate, above 90% free flow. The previous [0.3, 0.4, 0.7] was tuned
+    # for a far more congested network: on Twin Cities it put 84% of links in
+    # the single "free flow" bin (median ratio 0.93), so the peak-hour maps
+    # came out almost uniformly green and could not show where congestion
+    # actually differs. These bounds are absolute speed ratios rather than
+    # per-run quantiles, so colours mean the same thing across experiments.
+    CONGESTION_THRESHOLDS = [0.5, 0.75, 0.9]
     CONGESTION_LABELS = ['Severe', 'Congested', 'Moderate', 'Free flow']
 
     def __init__(self, experiment_dir: Path, ground_truth_data_dir: Optional[Path] = None):
@@ -504,6 +526,12 @@ class SimulationEvaluator:
         Sums volumes from both forward and reverse links when available,
         since traffic counting devices typically measure both directions.
 
+        NOTE: that forward+reverse sum is only correct for *bidirectional*
+        sensors. FHA rows are per-direction — H01..H24 hold one direction's
+        volume — so summing both carriageways against them roughly doubles the
+        simulated side. Per-direction rows are therefore treated as
+        unidirectional here, regardless of any reverse link recorded for them.
+
         Args:
             matched_devices: Devices matched to links with ground truth
             linkstats: Simulation linkstats with hourly volumes
@@ -541,13 +569,19 @@ class SimulationEvaluator:
             if has_primary:
                 sim_data = sim_data.iloc[0]
 
+            # Per-direction (FHA) rows already measure a single carriageway:
+            # adding the opposite one would double the simulated volume.
+            is_directional = ('travel_dir' in device.index
+                              and pd.notna(device.get('travel_dir')))
+
             # Check for reverse link — prefer the value from matched_devices.csv
             # (computed at counts-generation time), fall back to own lookup
             reverse_link_id = None
-            if 'reverse_link_id' in device.index:
-                reverse_link_id = self._normalize_link_id(device['reverse_link_id'])
-            if not reverse_link_id:
-                reverse_link_id = self.get_reverse_link_id(link_id)
+            if not is_directional:
+                if 'reverse_link_id' in device.index:
+                    reverse_link_id = self._normalize_link_id(device['reverse_link_id'])
+                if not reverse_link_id:
+                    reverse_link_id = self.get_reverse_link_id(link_id)
 
             reverse_sim_data = None
             has_reverse = False
@@ -723,7 +757,6 @@ class SimulationEvaluator:
                 'mae': 0,
                 'rmse': 0,
                 'mean_pct_error': 0,
-                'mean_geh': 0,
                 'geh_lt_5_pct': 0,
                 'correlation': 0,
                 'experiment_name': self.experiment_dir.name
@@ -767,6 +800,17 @@ class SimulationEvaluator:
         interquartile_mean_ratio = 0.0
         median_ratio = 0.0
         pct_stations_below_10pct = 0.0
+        # Coefficient of variation of the per-station ratios — the
+        # concentrated-vs-uniform test. A low CV means every station is off by
+        # roughly the same factor, so a single global lever (scaling_factor)
+        # can correct the whole region; a high CV means the error sits on
+        # particular corridors, where a global multiplier would inflate the
+        # stations that are already right. The mean ratio alone cannot tell
+        # these apart, which is why demand_estimator gates its scaling_factor
+        # recommendation on this value.
+        station_ratio_cv = 0.0
+        station_ratio_p10 = 0.0
+        station_ratio_p90 = 0.0
         if station_ratios:
             n = len(station_ratios)
             lo, hi = n // 4, n - n // 4
@@ -774,30 +818,139 @@ class SimulationEvaluator:
             interquartile_mean_ratio = sum(middle) / len(middle)
             median_ratio = station_ratios[n // 2]
             pct_stations_below_10pct = sum(1 for r in station_ratios if r < 0.10) / n * 100
+            mean_ratio = sum(station_ratios) / n
+            if mean_ratio > 0:
+                variance = sum((r - mean_ratio) ** 2 for r in station_ratios) / n
+                station_ratio_cv = np.sqrt(variance) / mean_ratio
+            # station_ratios is already sorted ascending.
+            station_ratio_p10 = station_ratios[max(0, int(0.10 * (n - 1)))]
+            station_ratio_p90 = station_ratios[min(n - 1, int(0.90 * (n - 1)))]
+
+        # ── Station-daily GEH — pass rates only ──────────────────────────
+        # GEH is defined on a single count over a stated period, so the GEH of
+        # a station's 24-hour total is a meaningful number and each station's
+        # own value is reported in the device reports and the spatial map.
+        # What is NOT reported is any average of them: GEH grows with volume,
+        # so a 30% error scores 2.8 at 100 veh/h and 19.8 at 5,000 veh/h, and
+        # averaging across stations of different size measures station size as
+        # much as model error — the mean is not the GEH of any real count.
+        # Counting how many stations pass a threshold has no such defect,
+        # because each station is compared against the threshold on its own.
+        station_daily_geh = {}
+        if len(station_totals) > 0:
+            denom = station_totals['simulated'] + station_totals['observed']
+            daily_geh = np.sqrt(
+                2 * (station_totals['simulated'] - station_totals['observed']) ** 2
+                / denom.where(denom > 0, np.nan)
+            ).dropna()
+            if len(daily_geh) > 0:
+                station_daily_geh = {
+                    'station_daily_geh_lt5_pct': round(
+                        float((daily_geh < 5).sum() / len(daily_geh) * 100), 2),
+                    'station_daily_geh_lt10_pct': round(
+                        float((daily_geh < 10).sum() / len(daily_geh) * 100), 2),
+                }
+
+        # ── How the error splits across stations ─────────────────────────
+        # The aggregate ratio alone cannot say whether the model is uniformly
+        # off or whether over- and under-simulating stations are cancelling.
+        station_split = {}
+        if station_ratios:
+            n = len(station_ratios)
+            over = sum(1 for r in station_ratios if r > 1.1)
+            under = sum(1 for r in station_ratios if r < 0.9)
+            station_split = {
+                'stations_over_simulated': int(over),
+                'stations_within_10pct': int(n - over - under),
+                'stations_under_simulated': int(under),
+                'stations_over_simulated_pct': round(over / n * 100, 1),
+            }
+
+        total_observed = float(comparison_df['observed'].sum())
+        total_simulated = float(comparison_df['simulated'].sum())
+        aggregate_ratio = (total_simulated / total_observed) if total_observed > 0 else 0.0
 
         metrics = {
             'num_devices': int(num_physical_stations),
             'num_comparisons': len(comparison_df),
             'num_directional_counts': int(num_directional_counts),
+            'aggregate_sim_obs_ratio': round(float(aggregate_ratio), 4),
+            'total_observed_volume': round(total_observed, 1),
+            'total_simulated_volume': round(total_simulated, 1),
+            **station_daily_geh,
+            **station_split,
+            **self._temporal_metrics(comparison_df),
             'mean_error': comparison_df['error'].mean(),
             'mae': comparison_df['abs_error'].mean(),
             'rmse': np.sqrt((comparison_df['error']**2).mean()),
             'mean_pct_error': comparison_df['pct_error'].mean(),  # NaN excluded automatically by pandas
             'pct_error_valid_count': int(valid_pct_error_count),
             'zero_observed_count': int(zero_observed_count),
-            'mean_geh': valid_geh.mean() if geh_valid_count > 0 else 0.0,
+            # No mean GEH: averaging GEH across station-hours of different
+            # volume measures station size as much as model error. The pass
+            # rate below counts each hourly count against the <5 convention
+            # individually, which is the form that convention is defined in.
             'geh_lt_5_pct': (valid_geh < 5).sum() / geh_valid_count * 100 if geh_valid_count > 0 else 0.0,
             'geh_valid_count': int(geh_valid_count),
             'correlation': correlation,
             'peak_hour_correlation': peak_correlation,
             'interquartile_mean_ratio': round(float(interquartile_mean_ratio), 4),
             'median_station_ratio': round(float(median_ratio), 4),
+            'station_ratio_cv': round(float(station_ratio_cv), 4),
+            'station_ratio_p10': round(float(station_ratio_p10), 4),
+            'station_ratio_p90': round(float(station_ratio_p90), 4),
+            'num_stations_with_ratio': len(station_ratios),
             'pct_stations_below_10pct': round(float(pct_stations_below_10pct), 2),
             'num_stations_below_10pct': int(sum(1 for r in station_ratios if r < 0.10)),
             'experiment_name': self.experiment_dir.name
         }
 
         return metrics
+
+    # Time-of-day blocks. Night is kept separate because it is where demand
+    # generation is weakest — a model can match daily totals while producing
+    # almost no overnight traffic, and an all-hours metric hides that.
+    TIME_BLOCKS = (
+        ('night', 0, 3),
+        ('morning', 4, 9),
+        ('midday', 10, 17),
+        ('evening', 18, 23),
+    )
+
+    @classmethod
+    def _temporal_metrics(cls, comparison_df: pd.DataFrame) -> Dict:
+        """Per-time-block sim/obs ratios, and the hourly ratio spread.
+
+        The single aggregate ratio can sit near 1.0 while individual parts of
+        the day are badly wrong in opposite directions. These fields make the
+        time-of-day profile visible per run, which is what distinguishes "not
+        enough demand" (every block low) from "demand in the wrong hours"
+        (peaks high, night near zero).
+        """
+        out: Dict[str, Any] = {}
+        if len(comparison_df) == 0 or 'hour' not in comparison_df.columns:
+            return out
+
+        for name, lo, hi in cls.TIME_BLOCKS:
+            blk = comparison_df[comparison_df['hour'].between(lo, hi)]
+            obs = float(blk['observed'].sum())
+            sim = float(blk['simulated'].sum())
+            out[f'ratio_{name}'] = round(sim / obs, 4) if obs > 0 else 0.0
+            out[f'observed_{name}'] = round(obs, 1)
+            out[f'simulated_{name}'] = round(sim, 1)
+
+        hourly = comparison_df.groupby('hour')[['observed', 'simulated']].sum()
+        hourly = hourly[hourly['observed'] > 0]
+        if len(hourly) > 0:
+            ratios = hourly['simulated'] / hourly['observed']
+            worst = (ratios - 1.0).abs().idxmax()
+            out['worst_hour'] = int(worst)
+            out['worst_hour_ratio'] = round(float(ratios.loc[worst]), 4)
+            # Spread of the hourly ratios: near 0 means the daily profile has
+            # the right shape and only its level is off (one global lever can
+            # fix it); large means the shape itself is wrong.
+            out['hourly_ratio_spread'] = round(float(ratios.max() - ratios.min()), 4)
+        return out
 
     def plot_comparison(self, comparison_df: pd.DataFrame, save: bool = True):
         """
@@ -860,16 +1013,30 @@ class SimulationEvaluator:
         ax.grid(True, alpha=0.3)
         ax.set_xticks(range(0, 24, 2))
 
-        # 3. GEH distribution (excluding NaN from zero-zero pairs)
+        # 3. Hourly sim/obs ratio.
+        # This replaces the old histogram of hourly GEH values. That histogram
+        # mixed stations of every size, and since GEH grows with volume it
+        # showed station size as much as model error — the mean of it was not
+        # the GEH of any real count. Per-station daily GEH is reported in the
+        # summary and in the per-device reports instead. What belongs here is
+        # the time-of-day profile, which is what a wrong-hours error looks
+        # like and what a single aggregate ratio hides.
         ax = axes[1, 0]
-        valid_geh = comparison_df['geh'].dropna()
-        ax.hist(valid_geh, bins=50, edgecolor='black', alpha=0.7)
-        ax.axvline(x=5, color='r', linestyle='--', label='GEH = 5 (threshold)')
-        ax.set_xlabel('GEH Statistic')
-        ax.set_ylabel('Frequency')
-        ax.set_title('GEH Distribution')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        hourly_tot = comparison_df.groupby('hour')[['observed', 'simulated']].sum()
+        hourly_tot = hourly_tot[hourly_tot['observed'] > 0]
+        if len(hourly_tot) > 0:
+            ratio = hourly_tot['simulated'] / hourly_tot['observed']
+            colors = ['#2ECC40' if 0.9 <= v <= 1.1 else
+                      '#FF4136' if v > 1.1 else '#0074D9' for v in ratio]
+            ax.bar(ratio.index, ratio.values, color=colors, edgecolor='black',
+                   linewidth=0.5)
+            ax.axhline(y=1.0, color='k', linestyle='--', linewidth=1)
+            ax.axhspan(0.9, 1.1, color='green', alpha=0.10)
+            ax.set_ylabel('Simulated / Observed')
+        ax.set_xlabel('Hour of Day')
+        ax.set_title('Hourly Sim/Obs Ratio (red = too much, blue = too little)')
+        ax.set_xticks(range(0, 24, 2))
+        ax.grid(True, alpha=0.3, axis='y')
 
         # 4. Error distribution (excluding NaN from zero-observed hours)
         ax = axes[1, 1]
@@ -890,8 +1057,285 @@ class SimulationEvaluator:
 
         return fig
 
+    # ── MATSim's own counts figures ──────────────────────────────────────
+    # MATSim writes two counts graphs per iteration, both from
+    # countscompare.txt: errors.png (box plot of signed relative error per
+    # hour) and biasErrors.png (mean |relative error| and mean bias per hour).
+    # We already read every number they plot, so these reproduce them from
+    # volume_comparison.csv rather than depending on MATSim's graph output —
+    # which is written per iteration and is not kept when
+    # write_intermediate_output is off.
+    #
+    # Relative error here is signed: (simulated - observed) / observed, in
+    # percent, which is the comparison_df 'pct_error' column. Hours with zero
+    # observed volume have no defined relative error and are excluded, exactly
+    # as they are everywhere else in this evaluator.
+
+    def plot_hourly_relative_error_box(self, comparison_df: pd.DataFrame,
+                                       save: bool = True):
+        """Box plot of signed relative error per hour — MATSim's errors.png.
+
+        The per-block and per-hour ratios elsewhere in this evaluator are
+        computed on summed volumes, so they describe the region as a whole and
+        say nothing about how much the individual stations disagree within an
+        hour. This shows that spread: an hour whose total is right can still be
+        built from stations that are badly wrong in both directions.
+
+        Whiskers span 1.5x the interquartile range; stations beyond that are
+        drawn individually as outliers.
+        """
+        if len(comparison_df) == 0 or 'pct_error' not in comparison_df.columns:
+            logger.warning("No comparison data; skipping hourly relative-error box plot")
+            return None
+
+        valid = comparison_df[comparison_df['pct_error'].notna()]
+        if len(valid) == 0:
+            logger.warning("No hours with observed volume > 0; skipping "
+                           "hourly relative-error box plot")
+            return None
+
+        hours = sorted(valid['hour'].unique())
+        data = [valid.loc[valid['hour'] == h, 'pct_error'].values for h in hours]
+
+        fig, ax = plt.subplots(figsize=(13, 6))
+        bp = ax.boxplot(data, positions=hours, widths=0.6, showfliers=True,
+                        showmeans=True, patch_artist=True,
+                        flierprops=dict(marker='o', markersize=3,
+                                        markerfacecolor='none',
+                                        markeredgecolor='#3465A4', alpha=0.6),
+                        meanprops=dict(marker='o', markerfacecolor='black',
+                                       markeredgecolor='black', markersize=5),
+                        medianprops=dict(color='#D62728', linewidth=1.4))
+        for patch in bp['boxes']:
+            patch.set_facecolor('#EDEDED')
+            patch.set_edgecolor('#555555')
+
+        # Zero is the target: the model matched the count exactly.
+        ax.axhline(y=0, color='k', linestyle='--', linewidth=1)
+        # -100% is the floor — a station that simulated nothing at all. No
+        # point can sit below it, so drawing it stops the lower whiskers from
+        # reading as an open-ended tail.
+        ax.axhline(y=-100, color='#999999', linestyle=':', linewidth=1)
+        # Right-hand side: hour 0 often sits ON the floor (nothing simulated
+        # overnight), and a label at the left would be drawn over that box.
+        ax.text(hours[-1] + 0.5, -100, 'simulated zero', va='bottom', ha='right',
+                fontsize=7, color='#666666')
+
+        ax.set_xlabel('Hour of Day')
+        ax.set_ylabel('Signed Relative Error [%]')
+        ax.set_xticks(range(0, 24, 2))
+        ax.set_xticklabels([f'{h:02d}' for h in range(0, 24, 2)])
+        ax.grid(True, alpha=0.3, axis='y')
+
+        # A handful of tiny-volume stations can over-simulate by several
+        # hundred percent, and letting them set the y-range squashes every box
+        # into a thin strip at the bottom — the run's actual shape becomes
+        # unreadable. The view is clipped just above the highest whisker
+        # instead, and the points left outside are counted in the subtitle so
+        # nothing is hidden silently.
+        #
+        # Only the upper whisker cap of each box matters here: bp['whiskers']
+        # holds two segments per box (lower then upper), so taking the max over
+        # all of them would be led by whichever segment happens to reach
+        # highest. The odd-indexed entries are the upper ones.
+        upper_caps = [w.get_ydata().max() for w in bp['whiskers'][1::2]]
+        whisker_top = max(upper_caps, default=0.0)
+        # The mean marker is called out in the subtitle, so an hour whose mean
+        # sits above the cut would leave the reader looking for a dot that was
+        # never drawn. Keep every mean inside the view.
+        mean_top = max((float(d.mean()) for d in data if len(d)), default=0.0)
+        data_max = float(valid['pct_error'].max())
+        top = min(max(float(whisker_top), mean_top) * 1.1 + 10, data_max)
+        n_above = int((valid['pct_error'] > top).sum())
+        ax.set_ylim(top=top)
+        clipped = (f'; {n_above} point(s) above {top:.0f}% not shown'
+                   if n_above else '')
+        ax.set_title(f'Signed Relative Error by Hour — {self.experiment_dir.name}\n'
+                     'box = interquartile range, red line = median, dot = mean'
+                     + clipped, fontsize=11)
+
+        plt.tight_layout()
+        if save:
+            plot_path = self.evaluation_dir / 'hourly_relative_error_box.png'
+            plt.savefig(plot_path, dpi=200, bbox_inches='tight')
+            logger.info(f"Saved hourly relative-error box plot to {plot_path}")
+            plt.close(fig)
+        return fig
+
+    def plot_hourly_bias(self, comparison_df: pd.DataFrame, save: bool = True):
+        """Mean |relative error| and mean bias per hour — MATSim's biasErrors.png.
+
+        Two series on two axes, because they answer different questions:
+
+        - **mean |relative error| (%)** — how wrong a typical station is that
+          hour, regardless of direction. Over- and under-simulating stations
+          both add to it, so it cannot be cancelled to zero the way a signed
+          average can.
+        - **mean bias (veh/h)** — the signed average of simulated minus
+          observed, in vehicles. This one *does* cancel, which is the point:
+          reading it against the line above separates "every station is off in
+          the same direction" from "stations are off in both directions".
+        """
+        if len(comparison_df) == 0 or 'pct_error' not in comparison_df.columns:
+            logger.warning("No comparison data; skipping hourly bias plot")
+            return None
+
+        valid = comparison_df[comparison_df['pct_error'].notna()]
+        if len(valid) == 0:
+            logger.warning("No hours with observed volume > 0; skipping hourly bias plot")
+            return None
+
+        # Relative error needs a non-zero observed volume to be defined, so it
+        # is averaged over *valid* only. Bias is in vehicles and is perfectly
+        # well defined when the sensor recorded nothing — that is exactly the
+        # case where the model invented traffic — so it is averaged over every
+        # row. Filtering both the same way would drop those hours from the
+        # bias line and hide over-simulation where there should be none.
+        mean_rel = valid.groupby('hour')['pct_error'].apply(lambda s: s.abs().mean())
+        mean_bias = comparison_df.groupby('hour')['error'].mean()
+        hours = mean_rel.index.tolist()
+        bias_hours = mean_bias.index.tolist()
+
+        fig, ax = plt.subplots(figsize=(13, 6))
+        ax.plot(hours, mean_rel.values, 's-', color='#D62728', linewidth=1.5,
+                markersize=4, label='Mean rel error [%]')
+        ax.set_xlabel('Hour of Day')
+        ax.set_ylabel('Mean rel error [%]', color='#D62728')
+        ax.tick_params(axis='y', labelcolor='#D62728')
+        ax.set_ylim(bottom=0)
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(range(0, 24, 2))
+
+        ax2 = ax.twinx()
+        ax2.plot(bias_hours, mean_bias.values, 'o-', color='#3465A4', linewidth=1.5,
+                 markersize=4, label='Mean bias [veh/h]')
+        ax2.axhline(y=0, color='#3465A4', linestyle=':', linewidth=1)
+        ax2.set_ylabel('Mean bias [veh/h]', color='#3465A4')
+        ax2.tick_params(axis='y', labelcolor='#3465A4')
+
+        lines = ax.get_lines()[:1] + ax2.get_lines()[:1]
+        ax.legend(lines, [l.get_label() for l in lines], loc='upper center',
+                  fontsize=9, ncol=2, framealpha=0.9)
+        ax.set_title(f'Hourly Error and Bias — {self.experiment_dir.name}',
+                     fontsize=12, fontweight='bold')
+
+        plt.tight_layout()
+        if save:
+            plot_path = self.evaluation_dir / 'hourly_bias.png'
+            plt.savefig(plot_path, dpi=200, bbox_inches='tight')
+            logger.info(f"Saved hourly bias plot to {plot_path}")
+            plt.close(fig)
+        return fig
+
+    # Hours the per-hour report figures are drawn for. Every hour of the day by
+    # default: the interesting hour is not always a peak — Birmingham's worst
+    # block was midday, which the old fixed [7, 8, 15, 16] list never showed.
+    # Overridable per region because the figures are not free: a full 24 hours
+    # costs roughly seven minutes and ~250 MB of PNGs per run.
+    DEFAULT_REPORT_HOURS = tuple(range(24))
+
+    @staticmethod
+    def _link_segments(links: pd.DataFrame) -> np.ndarray:
+        """(N, 2, 2) array of link endpoints for a LineCollection.
+
+        Vectorised on purpose. The obvious ``for _, row in links.iterrows()``
+        costs ~6.9 s on a 204k-link network — an order of magnitude more than
+        the 0.75 s it takes to actually draw and save the figure — and the
+        per-hour maps rebuild this once per hour. The numpy reshape is
+        effectively free.
+        """
+        return (links[['from_x', 'from_y', 'to_x', 'to_y']]
+                .to_numpy(dtype=float)
+                .reshape(-1, 2, 2))
+
+    def report_hours(self) -> List[int]:
+        """Clock hours (0-23) to draw per-hour figures for.
+
+        Read from ``evaluation.report_hours`` in the run's own config, so a
+        region can trim the list without a code change. Invalid entries are
+        dropped with a warning rather than failing the run — a bad config value
+        should not cost a completed simulation its figures.
+        """
+        configured = None
+        for name in ('config_used.json', 'config.json'):
+            path = self.experiment_dir / name
+            if path.exists():
+                try:
+                    with open(path, 'r') as f:
+                        configured = (json.load(f).get('evaluation') or {}).get('report_hours')
+                except (OSError, ValueError) as exc:
+                    logger.warning(f"Could not read report_hours from {name}: {exc}")
+                break
+
+        if configured is None:
+            return list(self.DEFAULT_REPORT_HOURS)
+        if not isinstance(configured, (list, tuple)):
+            logger.warning(f"evaluation.report_hours is not a list ({configured!r}); "
+                           f"using every hour")
+            return list(self.DEFAULT_REPORT_HOURS)
+
+        hours = []
+        for h in configured:
+            if isinstance(h, int) and 0 <= h <= 23:
+                hours.append(h)
+            else:
+                logger.warning(f"Ignoring invalid report_hours entry {h!r} "
+                               f"(want an integer 0-23)")
+        if not hours:
+            logger.warning("evaluation.report_hours had no valid hours; using every hour")
+            return list(self.DEFAULT_REPORT_HOURS)
+        return sorted(set(hours))
+
+    def plot_counts_loglog(self, hours: Optional[List[int]] = None) -> int:
+        """Log-log observed-vs-simulated scatter per hour, into evaluation/.
+
+        Delegates to scripts/generate_counts_loglog.py rather than
+        reimplementing it: that script is also the standalone tool for
+        comparing several runs on one set of axes, and two copies of the same
+        plotting code would drift apart. Reads countscompare.txt directly, as
+        the script does.
+
+        Returns the number of figures written. Failure is logged and swallowed
+        — a missing scatter plot is not worth failing a completed run over.
+        """
+        if hours is None:
+            hours = self.report_hours()
+
+        try:
+            import sys
+            scripts_dir = Path(__file__).resolve().parent.parent / 'scripts'
+            if str(scripts_dir) not in sys.path:
+                sys.path.insert(0, str(scripts_dir))
+            import generate_counts_loglog as loglog
+        except ImportError as exc:
+            logger.warning(f"Could not import generate_counts_loglog: {exc}")
+            return 0
+
+        counts_file = loglog.find_countscompare(self.experiment_dir)
+        if counts_file is None:
+            logger.warning("No countscompare.txt found; skipping log-log scatter plots")
+            return 0
+
+        try:
+            loglog.generate_overlay(
+                {self.experiment_dir.name: counts_file},
+                hours,
+                sum_directions=False,
+                out_dir=self.evaluation_dir,
+                connect=False,
+                fmt='png',
+            )
+        except Exception as exc:
+            logger.warning(f"Log-log scatter generation failed: {exc}")
+            return 0
+
+        written = len(list(self.evaluation_dir.glob('counts_loglog_h*.png')))
+        logger.info(f"Saved {written} log-log scatter plot(s) to {self.evaluation_dir}")
+        return written
+
     def plot_spatial_maps(self, matched_devices: pd.DataFrame, linkstats: pd.DataFrame,
-                          comparison_df: pd.DataFrame, save: bool = True):
+                          comparison_df: pd.DataFrame, save: bool = True,
+                          hours: Optional[List[int]] = None):
         """
         Create spatial overview map showing network traffic
 
@@ -940,7 +1384,9 @@ class SimulationEvaluator:
             logger.info(f"Saved spatial overview to {plot_path}")
             plt.close(fig)
 
-        self.plot_hourly_pct_error_maps(matched_devices, comparison_df, hours=[7, 8, 15, 16], save=save)
+        self.plot_hourly_pct_error_maps(matched_devices, comparison_df,
+                                        hours=hours if hours is not None else [7, 8, 15, 16],
+                                        save=save)
 
         return fig
 
@@ -960,10 +1406,7 @@ class SimulationEvaluator:
             hours = [7, 8, 17, 18]
 
         # Pre-build network segments once
-        segments = [
-            [(row['from_x'], row['from_y']), (row['to_x'], row['to_y'])]
-            for _, row in self.network_links.iterrows()
-        ]
+        segments = self._link_segments(self.network_links)
 
         for hour in hours:
             hour_df = comparison_df[comparison_df['hour'] == hour].copy()
@@ -988,43 +1431,37 @@ class SimulationEvaluator:
             ax.add_collection(lc)
             self._draw_county_boundaries(ax)
 
-            # Plot each device colored AND shaped by |pct_error| (readable in B&W)
-            # Good=circle/green, Acceptable=square/yellow, Poor=triangle/red
-            # N/A (observed=0) treated as Poor
-            _tier_style = {
-                'good':       ('#2ECC40', 'o'),
-                'acceptable': ('#FFDC00', 's'),
-                'poor':       ('#FF4136', '^'),
-            }
-            for _, dev in hour_devices.iterrows():
-                pct = dev.get('pct_error', np.nan)
-                if pd.isna(pct):
-                    color, marker = _tier_style['poor']
-                else:
-                    abs_pct = abs(pct)
-                    if abs_pct <= 15:
-                        color, marker = _tier_style['good']
-                    elif abs_pct <= 30:
-                        color, marker = _tier_style['acceptable']
-                    else:
-                        color, marker = _tier_style['poor']
+            # One arrow per station-direction, offset clear of the road. Both
+            # directions of a sensor share a lat/lon, so markers drawn at the
+            # raw coordinate sit exactly on top of each other and half the
+            # stations are invisible. Colour alone carries the tier — the
+            # circle/square/triangle shapes were redundant with it.
+            def _pct_color(pct):
+                if pct is None or pd.isna(pct):
+                    return '#FF4136'          # no data — treated as poor
+                abs_pct = abs(pct)
+                if abs_pct <= 15:
+                    return '#2ECC40'
+                if abs_pct <= 30:
+                    return '#FFDC00'
+                return '#FF4136'
 
-                ax.scatter(dev['utm_x'], dev['utm_y'], c=color, s=40,
-                           marker=marker, edgecolors='black', linewidths=0.8, zorder=5)
+            self._draw_station_arrows(ax, hour_devices, 'pct_error', _pct_color)
 
             ax.set_aspect('equal')
             ax.set_xlabel('UTM X (m)')
             ax.set_ylabel('UTM Y (m)')
             ax.grid(True, alpha=0.3)
 
-            from matplotlib.lines import Line2D
             legend_elements = [
-                Line2D([0], [0], marker='o', color='w', markerfacecolor='#2ECC40',
-                       markeredgecolor='black', markersize=7, label='|% error| ≤ 15%  (Good)'),
-                Line2D([0], [0], marker='s', color='w', markerfacecolor='#FFDC00',
-                       markeredgecolor='black', markersize=7, label='|% error| 15–30%  (Acceptable)'),
-                Line2D([0], [0], marker='^', color='w', markerfacecolor='#FF4136',
-                       markeredgecolor='black', markersize=7, label='|% error| > 30% or no data  (Poor)'),
+                Line2D([0], [0], color='#2ECC40', lw=5, solid_capstyle='butt',
+                       label='|% error| ≤ 15%  (Good)'),
+                Line2D([0], [0], color='#FFDC00', lw=5, solid_capstyle='butt',
+                       label='|% error| 15–30%  (Acceptable)'),
+                Line2D([0], [0], color='#FF4136', lw=5, solid_capstyle='butt',
+                       label='|% error| > 30% or no data  (Poor)'),
+                Line2D([0], [0], color='#555555', lw=5, solid_capstyle='butt',
+                       label='One bar per direction, aligned with the road'),
                 mpatches.Patch(facecolor='none', edgecolor='blue', linestyle='--',
                                linewidth=2, label='County Boundary'),
             ]
@@ -1032,7 +1469,8 @@ class SimulationEvaluator:
 
             if save:
                 plot_path = self.evaluation_dir / f'count_error_h{hour:02d}.png'
-                plt.savefig(plot_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
+                plt.savefig(plot_path, dpi=self.HOUR_FIGURE_DPI,
+                            bbox_inches='tight', pad_inches=0.1)
                 logger.info(f"Saved hourly pct-error map to {plot_path}")
                 plt.close(fig)
 
@@ -1041,33 +1479,23 @@ class SimulationEvaluator:
         """Plot network as gray background with GEH-colored device markers."""
 
         # Draw all links as gray background
-        segments = [[(link['from_x'], link['from_y']), (link['to_x'], link['to_y'])]
-                    for _, link in links_with_volume.iterrows()]
+        segments = self._link_segments(links_with_volume)
         lc = LineCollection(segments, colors='#9D9C9C', linewidths=0.8, alpha=0.5)
         ax.add_collection(lc)
 
         # Draw county boundary polygons
         self._draw_county_boundaries(ax)
 
-        # Plot devices colored by GEH
-        device_geh = comparison_df.groupby('device_id')['geh'].mean().reset_index()
-        devices_with_geh = matched_devices.merge(device_geh, left_on='LOCAL_ID', right_on='device_id', how='left')
+        # Colour each station by the GEH of its DAILY TOTAL, not the mean of
+        # its 24 hourly GEH values. GEH scales with volume, so hourly GEH is
+        # small simply because hourly counts are small; averaging 24 of them
+        # produces a number that is not the GEH of anything and is not
+        # comparable to the GEH < 5 convention this legend cites.
+        device_geh = self._station_daily_geh(comparison_df)
+        devices_with_geh = matched_devices.merge(
+            device_geh, left_on='LOCAL_ID', right_on='device_id', how='left')
 
-        # Color devices by GEH performance
-        for _, device in devices_with_geh.iterrows():
-            geh = device.get('geh', float('inf'))
-            if geh < 5:
-                color = '#2ECC40'  # Green: good
-                marker = 'o'
-            elif geh < 10:
-                color = '#FFDC00'  # Yellow: acceptable
-                marker = 's'
-            else:
-                color = '#FF4136'  # Red: poor
-                marker = '^'
-
-            ax.scatter(device['utm_x'], device['utm_y'], c=color, s=100,
-                      edgecolors='black', linewidths=1.5, marker=marker, zorder=5)
+        self._draw_station_arrows(ax, devices_with_geh, 'geh', self._geh_color)
 
         ax.set_aspect('equal')
         ax.set_xlabel('UTM X (m)')
@@ -1079,17 +1507,102 @@ class SimulationEvaluator:
             mpatches.Patch(facecolor='#2ECC40', label='GEH < 5 (Good)', edgecolor='black'),
             mpatches.Patch(facecolor='#FFDC00', label='GEH 5-10 (Acceptable)', edgecolor='black'),
             mpatches.Patch(facecolor='#FF4136', label='GEH > 10 (Poor)', edgecolor='black'),
+            Line2D([0], [0], color='#555555', lw=5, solid_capstyle='butt',
+                   label='One bar per direction, offset from the road'),
             mpatches.Patch(facecolor='none', edgecolor='blue', linestyle='--',
                            linewidth=2, label='County Boundary'),
         ]
-        ax.legend(handles=legend_elements, loc='upper right', framealpha=0.9)
+        ax.legend(handles=legend_elements, loc='upper right', framealpha=0.9,
+                  fontsize=9)
+
+    # ── Station rendering helpers ────────────────────────────────────────
+
+    @staticmethod
+    def _station_daily_geh(comparison_df: pd.DataFrame) -> pd.DataFrame:
+        """GEH of each station's 24-hour totals — a real GEH of a real count.
+
+        Returns a DataFrame with columns device_id, geh, observed, simulated.
+        """
+        totals = (comparison_df.groupby('device_id')[['observed', 'simulated']]
+                  .sum().reset_index())
+        denom = totals['simulated'] + totals['observed']
+        totals['geh'] = np.where(
+            denom > 0,
+            np.sqrt(2 * (totals['simulated'] - totals['observed']) ** 2
+                    / denom.where(denom > 0, 1)),
+            np.nan,
+        )
+        return totals
+
+    @staticmethod
+    def _geh_color(geh: float) -> str:
+        if geh is None or (isinstance(geh, float) and np.isnan(geh)):
+            return '#BBBBBB'
+        if geh < 5:
+            return '#2ECC40'
+        if geh < 10:
+            return '#FFDC00'
+        return '#FF4136'
+
+    def _draw_station_arrows(self, ax, devices: pd.DataFrame, value_col: str,
+                             color_fn, offset_m: float = 900.0,
+                             length_m: float = 2400.0,
+                             width_m: float = 700.0):
+        """Draw one bar per station-direction, offset clear of the road.
+
+        A physical sensor reports each travel direction as its own row at the
+        SAME lat/lon, so plotting a marker at the raw coordinate draws the two
+        directions exactly on top of each other — half the stations are hidden.
+        Each direction is instead drawn as a small rectangle aligned with the
+        road, pushed perpendicular to its own heading so the pair sits side by
+        side and both stay readable.
+        """
+        # FHWA cardinal codes -> unit vector (x=east, y=north) in UTM.
+        dir_vectors = {1: (0.0, 1.0), 3: (1.0, 0.0), 5: (0.0, -1.0), 7: (-1.0, 0.0)}
+
+        for _, device in devices.iterrows():
+            value = device.get(value_col)
+            color = color_fn(value)
+
+            travel_dir = device.get('travel_dir')
+            try:
+                travel_dir = int(travel_dir)
+            except (TypeError, ValueError):
+                travel_dir = None
+            dx, dy = dir_vectors.get(travel_dir, (1.0, 0.0))
+
+            if travel_dir is None:
+                # No direction recorded: fall back to a dot rather than a bar
+                # whose orientation would imply a heading we do not know.
+                ax.scatter(device['utm_x'], device['utm_y'], c=color, s=45,
+                           edgecolors='black', linewidths=0.7, zorder=5)
+                continue
+
+            # Perpendicular offset (right-hand side of travel), so the two
+            # directions of one sensor land on opposite sides of its location
+            # instead of exactly on top of each other.
+            px, py = dy, -dx
+            cx = device['utm_x'] + px * offset_m
+            cy = device['utm_y'] + py * offset_m
+
+            # A small rectangle aligned with the direction of travel. Simpler
+            # and cleaner than an arrow at this scale: the bar shows the axis
+            # of the road, and the offset does the work of separating the pair.
+            angle = np.degrees(np.arctan2(dy, dx))
+            rect = mpatches.Rectangle(
+                (-length_m / 2.0, -width_m / 2.0), length_m, width_m,
+                facecolor=color, edgecolor='black', linewidth=0.8, zorder=5,
+                transform=(transforms.Affine2D()
+                           .rotate_deg(angle)
+                           .translate(cx, cy) + ax.transData),
+            )
+            ax.add_patch(rect)
 
     def _plot_traffic_heatmap_clean(self, ax, links_with_volume: pd.DataFrame):
         """Plot network as gray background (no count stations or GEH)."""
 
         # Draw all links as gray
-        segments = [[(link['from_x'], link['from_y']), (link['to_x'], link['to_y'])]
-                    for _, link in links_with_volume.iterrows()]
+        segments = self._link_segments(links_with_volume)
         lc = LineCollection(segments, colors='#9D9C9C', linewidths=0.8, alpha=0.5)
         ax.add_collection(lc)
 
@@ -1249,9 +1762,10 @@ class SimulationEvaluator:
         return segments
 
     def plot_peak_hour_highway_heatmaps(self, linkstats: pd.DataFrame, save: bool = True,
-                                           show_county_borders: bool = False, smoothing: str = 'gaussian'):
+                                           show_county_borders: bool = False, smoothing: str = 'gaussian',
+                                           hours: Optional[List[int]] = None):
         """
-        Create Google-Maps-style congestion heatmaps for 8 AM and 5 PM, highways only.
+        Create Google-Maps-style congestion heatmaps per hour, highways only.
 
         Colors links by speed/freespeed ratio (congestion), not raw volume.
         Thresholds are defined in CONGESTION_THRESHOLDS class constant.
@@ -1262,6 +1776,10 @@ class SimulationEvaluator:
             show_county_borders: Whether to draw county boundary polygons
             smoothing: Smoothing method - 'neighbor' (length-weighted network averaging),
                        'gaussian' (spatial Gaussian kernel), or None to disable
+            hours: Clock hours (0-23) to draw. Defaults to the two classic peaks.
+                   The 8 AM and 5 PM figures keep their historical filenames so
+                   existing reports and links do not break; every other hour is
+                   written as heatmap_h{HH}_highways.png.
         """
         if self.network_links is None:
             logger.warning("Network not loaded, cannot generate peak hour heatmaps")
@@ -1286,9 +1804,20 @@ class SimulationEvaluator:
                     f"(of {len(self.network_links):,} total)")
 
         # hour_index 8 = 8:00-9:00 AM, hour_index 17 = 5:00-6:00 PM
+        _LEGACY_NAMES = {8: 'heatmap_8am_highways.png',
+                         17: 'heatmap_5pm_highways.png'}
+
+        def _label(h: int) -> str:
+            if h == 0:
+                return '12 AM'
+            if h == 12:
+                return '12 PM'
+            return f'{h} AM' if h < 12 else f'{h - 12} PM'
+
+        requested = [8, 17] if hours is None else list(hours)
         peak_hours = [
-            (8, '8 AM', 'heatmap_8am_highways.png'),
-            (17, '5 PM', 'heatmap_5pm_highways.png'),
+            (h, _label(h), _LEGACY_NAMES.get(h, f'heatmap_h{h:02d}_highways.png'))
+            for h in requested
         ]
 
         # Discrete colormap: each color maps to a threshold bin
@@ -1405,9 +1934,13 @@ class SimulationEvaluator:
 
             if save:
                 plot_path = self.evaluation_dir / filename
-                plt.savefig(plot_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
-                logger.info(f"Saved peak hour heatmap to {plot_path}")
+                plt.savefig(plot_path, dpi=self.HOUR_FIGURE_DPI,
+                            bbox_inches='tight', pad_inches=0.1)
+                logger.info(f"Saved congestion heatmap to {plot_path}")
                 plt.close(fig)
+                # Only the caller's figure list keeps a reference otherwise;
+                # holding 24 open figures is a needless megabyte-scale leak.
+                continue
 
             figs.append(fig)
 
@@ -1648,7 +2181,15 @@ class SimulationEvaluator:
         # Calculate stats
         mae = device_data['abs_error'].mean()
         rmse = np.sqrt((device_data['error']**2).mean())
-        mean_geh = device_data['geh'].mean()
+        # This station's own daily GEH: one count (its 24-hour total) over one
+        # period, which is what a GEH is defined on. The mean of its 24 hourly
+        # GEH values is not — GEH grows with volume, so that mean tracks how
+        # busy the station's quiet hours are rather than how wrong the model is.
+        day_obs = device_data['observed'].sum()
+        day_sim = device_data['simulated'].sum()
+        denom = day_sim + day_obs
+        daily_geh = (np.sqrt(2 * (day_sim - day_obs) ** 2 / denom)
+                     if denom > 0 else float('nan'))
         # GEH<5 share over hours with a defined GEH (NaN = zero-zero hours, which
         # are neither a match nor a miss). Counting them in the denominator would
         # understate the pass rate.
@@ -1664,13 +2205,13 @@ class SimulationEvaluator:
 
         # Create table ('N/A' when a metric is undefined for this device)
         geh_lt_5_str = f'{geh_lt_5_pct:.1f}%' if np.isfinite(geh_lt_5_pct) else 'N/A'
-        mean_geh_str = f'{mean_geh:.2f}' if np.isfinite(mean_geh) else 'N/A'
+        daily_geh_str = f'{daily_geh:.2f}' if np.isfinite(daily_geh) else 'N/A'
         corr_str = f'{correlation:.3f}' if np.isfinite(correlation) else 'N/A'
         stats_data = [
             ['Metric', 'Value'],
             ['Mean Abs Error (MAE)', f'{mae:.1f} veh/hr'],
             ['Root Mean Sq Error (RMSE)', f'{rmse:.1f} veh/hr'],
-            ['Mean GEH', mean_geh_str],
+            ['GEH of daily total', daily_geh_str],
             ['Hours with GEH < 5', geh_lt_5_str],
             ['Correlation', corr_str],
         ]
@@ -1817,29 +2358,49 @@ class SimulationEvaluator:
         comparison_df.to_csv(comparison_path, index=False)
         logger.info(f"Saved comparison results to {comparison_path}")
 
-        metrics_path = self.evaluation_dir / 'summary_metrics.json'
-        import json
-        with open(metrics_path, 'w') as f:
-            json.dump(summary_metrics, f, indent=2)
-        logger.info(f"Saved summary metrics to {metrics_path}")
+        # Metrics are not written here: they are returned to the caller and land
+        # in experiment_summary.json under 'evaluation', which is the single
+        # source of truth for a run. The separate evaluation/summary_metrics.json
+        # was removed to stop the two files drifting apart.
 
         # Note: the pooled 4-panel volume_comparison.png was removed — it averaged
         # GEH / pct-error / volumes across all station-hours, which over-weights
         # high-volume links and hides per-station matching errors. Per-station
-        # device_reports/ and summary_metrics.json (IQM ratio) are the canonical
-        # views now. plot_comparison() is kept for ad-hoc use but no longer called.
+        # device_reports/ and the summary's evaluation section (IQM ratio) are the
+        # canonical views now. plot_comparison() is kept for ad-hoc use but no
+        # longer called.
+
+        # MATSim's own two counts figures, rebuilt from the same numbers it
+        # plots. These are cheap (no network geometry) so they are written on
+        # every run, independent of generate_spatial_maps.
+        self.plot_hourly_relative_error_box(comparison_df)
+        self.plot_hourly_bias(comparison_df)
+
+        hours = self.report_hours()
 
         # Generate spatial maps if requested and we have matched devices
         if generate_spatial_maps and len(matched_devices) > 0:
             logger.info("Generating spatial overview maps...")
-            self.plot_spatial_maps(matched_devices, linkstats, comparison_df)
+            self.plot_spatial_maps(matched_devices, linkstats, comparison_df,
+                                   hours=hours)
 
         # Always generate heatmap-only and peak hour highway maps when spatial maps are requested
         if generate_spatial_maps:
             logger.info("Generating heatmap-only map...")
             self.plot_heatmap_only(linkstats)
-            logger.info("Generating peak hour highway heatmaps...")
+            # Congestion heatmaps stay on the two classic peaks rather than
+            # following report_hours. They are the most expensive figure in the
+            # evaluation (~12 s each, dominated by the per-hour Gaussian
+            # smoothing) and the least informative hour to hour — congestion
+            # changes slowly, so 24 of them cost ~5 minutes to show much the
+            # same picture. 8 AM and 5 PM bracket the day's two peaks.
+            logger.info("Generating peak hour highway heatmaps (8 AM, 5 PM)...")
             self.plot_peak_hour_highway_heatmaps(linkstats)
+
+        # Log-log observed-vs-simulated scatter, one per hour. Third of the
+        # three per-hour views, alongside the count-error map and the
+        # congestion heatmap.
+        self.plot_counts_loglog(hours)
 
         # Generate per-device reports if requested
         if generate_per_device_reports and len(matched_devices) > 0:

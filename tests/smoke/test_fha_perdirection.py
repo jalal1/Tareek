@@ -18,6 +18,7 @@ from shapely.geometry import LineString
 
 from matsim.counts_generator import (
     CountsGenerator, DIR_TO_BEARING, OPPOSITE_DIRS, HOUR_COLS_UPPER,
+    parse_f_system,
 )
 from matsim.evaluator import SimulationEvaluator
 
@@ -32,7 +33,11 @@ def _make_generator():
 
 
 def _load_links(g, links: pd.DataFrame):
-    """Wire a tiny network into the generator (mimics load_network)."""
+    """Wire a tiny network into the generator (mimics load_network).
+
+    Links may carry 'capacity'/'freespeed' for facility-class matching; when
+    absent they default to freeway-grade so class-agnostic tests are unaffected.
+    """
     g.network_links = links
     g.link_geometries = {
         r['link_id']: LineString([(r['from_x'], r['from_y']), (r['to_x'], r['to_y'])])
@@ -40,6 +45,11 @@ def _load_links(g, links: pd.DataFrame):
     }
     g._link_endpoints = {
         r['link_id']: (r['from_x'], r['from_y'], r['to_x'], r['to_y'])
+        for _, r in links.iterrows()
+    }
+    g._link_attributes = {
+        r['link_id']: (float(r.get('capacity', 8000.0)),
+                       float(r.get('freespeed', 26.8)))
         for _, r in links.iterrows()
     }
     idx = index.Index()
@@ -53,13 +63,14 @@ def _load_links(g, links: pd.DataFrame):
     }
 
 
-def _station_rows(base, dirs_and_vols):
+def _station_rows(base, dirs_and_vols, f_system=None):
     """Build (volumes_df, stations_df) for one physical station with given dirs."""
     stations, volumes = [], []
     for d, vol in dirs_and_vols:
         lid = f"{base}_{d}"
         stations.append({'LOCAL_ID': lid, 'station_base': base, 'travel_dir': d,
-                         'utm_x': 500, 'utm_y': 500, 'Latitude': 44.0, 'Longitude': -93.0})
+                         'utm_x': 500, 'utm_y': 500, 'Latitude': 44.0, 'Longitude': -93.0,
+                         'f_system': f_system})
         rec = {h: vol for h in HOUR_COLS_UPPER}
         rec['LOCAL_ID'] = lid
         volumes.append(rec)
@@ -155,6 +166,112 @@ def test_directional_pair_assigned_to_antiparallel_links():
     for col in ('LOCAL_ID', 'travel_dir', 'matched_link_id', 'utm_x', 'utm_y',
                 'Latitude', 'Longitude'):
         assert col in out.columns
+
+
+# ---------------------------------------------------------------------------
+# Facility-class (HPMS f_system) matching
+# ---------------------------------------------------------------------------
+
+def _freeway_and_frontage():
+    """A 4-lane freeway pair 27 m away, plus a 1-lane frontage pair at 0 m.
+
+    Mirrors the real TwinCities failure: the sensor coordinate sits ON the
+    frontage road, so nearest-link matching binds an Interstate count to a
+    600 veh/h service road.
+    """
+    return pd.DataFrame([
+        # Frontage road carriageways — closest to the sensor, but tiny.
+        {'link_id': 'frontN', 'from_node': 'f1', 'to_node': 'f2',
+         'from_x': 500, 'from_y': 480, 'to_x': 500, 'to_y': 520,
+         'capacity': 600.0, 'freespeed': 11.1},
+        {'link_id': 'frontS', 'from_node': 'f2', 'to_node': 'f1',
+         'from_x': 500, 'from_y': 520, 'to_x': 500, 'to_y': 480,
+         'capacity': 600.0, 'freespeed': 11.1},
+        # Freeway carriageways — 27 m east, 4 lanes, freeway speed.
+        {'link_id': 'fwyN', 'from_node': 'w1', 'to_node': 'w2',
+         'from_x': 527, 'from_y': 480, 'to_x': 527, 'to_y': 520,
+         'capacity': 8000.0, 'freespeed': 26.8},
+        {'link_id': 'fwyS', 'from_node': 'w2', 'to_node': 'w1',
+         'from_x': 527, 'from_y': 520, 'to_x': 527, 'to_y': 480,
+         'capacity': 8000.0, 'freespeed': 26.8},
+    ])
+
+
+@pytest.mark.smoke
+def test_parse_f_system_variants():
+    assert parse_f_system('1U') == 1
+    assert parse_f_system('3R') == 3
+    assert parse_f_system('2') == 2
+    assert parse_f_system(4) == 4
+    for blank in ('', '   ', None, 'X', float('nan')):
+        assert parse_f_system(blank) is None
+
+
+@pytest.mark.smoke
+def test_interstate_station_skips_frontage_road():
+    """An f_system=1 station binds to the freeway, not the closer frontage road."""
+    g = _make_generator()
+    _load_links(g, _freeway_and_frontage())
+    volumes, stations = _station_rows('FHA_27_010794', [(1, 60000), (5, 60000)],
+                                      f_system='1U')
+    out = g.match_fha_directional_to_links(volumes, stations)
+    assert len(out) == 2
+    assert set(out['matched_link_id']) == {'fwyN', 'fwyS'}
+    assert set(out['match_method']) == {'class'}
+
+
+@pytest.mark.smoke
+def test_local_station_still_uses_nearest_link():
+    """Functional systems 5-7 are unconstrained — nearest-link wins as before."""
+    g = _make_generator()
+    _load_links(g, _freeway_and_frontage())
+    volumes, stations = _station_rows('FHA_27_000001', [(1, 300), (5, 250)],
+                                      f_system='7U')
+    out = g.match_fha_directional_to_links(volumes, stations)
+    assert set(out['matched_link_id']) == {'frontN', 'frontS'}
+    assert set(out['match_method']) == {'nearest'}
+
+
+@pytest.mark.smoke
+def test_missing_f_system_falls_back_to_nearest():
+    """No class signal => unchanged legacy behaviour, no station lost."""
+    g = _make_generator()
+    _load_links(g, _freeway_and_frontage())
+    volumes, stations = _station_rows('FHA_27_000002', [(1, 300), (5, 250)],
+                                      f_system=None)
+    out = g.match_fha_directional_to_links(volumes, stations)
+    assert len(out) == 2
+    assert set(out['matched_link_id']) == {'frontN', 'frontS'}
+
+
+@pytest.mark.smoke
+def test_interstate_with_no_plausible_link_is_dropped():
+    """Rather than bind an Interstate count to a service road, drop it."""
+    g = _make_generator()
+    _load_links(g, pd.DataFrame([
+        {'link_id': 'frontN', 'from_node': 'f1', 'to_node': 'f2',
+         'from_x': 500, 'from_y': 480, 'to_x': 500, 'to_y': 520,
+         'capacity': 600.0, 'freespeed': 11.1},
+        {'link_id': 'frontS', 'from_node': 'f2', 'to_node': 'f1',
+         'from_x': 500, 'from_y': 520, 'to_x': 500, 'to_y': 480,
+         'capacity': 600.0, 'freespeed': 11.1},
+    ]))
+    volumes, stations = _station_rows('FHA_27_010794', [(1, 60000), (5, 60000)],
+                                      f_system='1U')
+    out = g.match_fha_directional_to_links(volumes, stations)
+    assert out.empty
+
+
+@pytest.mark.smoke
+def test_link_matches_fsystem_thresholds():
+    g = _make_generator()
+    _load_links(g, _freeway_and_frontage())
+    # Interstate (1) rejects the frontage road, accepts the freeway.
+    assert not g.link_matches_fsystem('frontN', 1)
+    assert g.link_matches_fsystem('fwyN', 1)
+    # Unconstrained classes accept anything.
+    assert g.link_matches_fsystem('frontN', 7)
+    assert g.link_matches_fsystem('frontN', None)
 
 
 @pytest.mark.smoke

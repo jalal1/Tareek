@@ -71,9 +71,9 @@ class ExperimentTracker:
 
         # Evaluation - primary
         'geh_lt_5_pct',
+        'station_daily_geh_lt5_pct',
         'correlation',
         'peak_hour_correlation',
-        'mean_geh',
 
         # Evaluation - secondary
         'mae',
@@ -273,9 +273,9 @@ class ExperimentTracker:
         evaluation = summary.get('evaluation', {})
         if evaluation:
             row['geh_lt_5_pct'] = evaluation.get('geh_lt_5_pct')
+            row['station_daily_geh_lt5_pct'] = evaluation.get('station_daily_geh_lt5_pct')
             row['correlation'] = evaluation.get('correlation')
             row['peak_hour_correlation'] = evaluation.get('peak_hour_correlation')
-            row['mean_geh'] = evaluation.get('mean_geh')
             row['mae'] = evaluation.get('mae')
             row['rmse'] = evaluation.get('rmse')
             row['mean_pct_error'] = evaluation.get('mean_pct_error')

@@ -1422,10 +1422,7 @@ def load_experiment_feedback(config: Dict[str, Any]) -> Dict[str, Any] | None:
     try:
         with open(best_summary, "r") as f:
             summary = json.load(f)
-        eval_data = None
-        if best_eval:
-            with open(best_eval, "r") as f:
-                eval_data = json.load(f)
+        eval_data = read_evaluation_metrics(best_summary.parent, summary)
         return {
             "summary": summary,
             "evaluation": eval_data,
@@ -1433,6 +1430,41 @@ def load_experiment_feedback(config: Dict[str, Any]) -> Dict[str, Any] | None:
         }
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def read_evaluation_metrics(
+    exp_dir: Path,
+    summary: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    """Evaluation metrics for a run, from experiment_summary.json.
+
+    The summary's ``evaluation`` section is the single source of truth. Runs
+    produced before that consolidation also wrote
+    ``evaluation/summary_metrics.json``; that file is read as a fallback so
+    older experiments stay usable, but nothing writes it any more.
+    """
+    exp_dir = Path(exp_dir)
+    if summary is None:
+        summary_file = exp_dir / "experiment_summary.json"
+        if summary_file.is_file():
+            try:
+                with open(summary_file, "r") as f:
+                    summary = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                summary = None
+
+    section = (summary or {}).get("evaluation")
+    if isinstance(section, dict) and section:
+        return section
+
+    legacy = exp_dir / "evaluation" / "summary_metrics.json"
+    if legacy.is_file():
+        try:
+            with open(legacy, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return None
+    return None
 
 
 def recommend_adjustments(
@@ -1503,6 +1535,8 @@ def recommend_adjustments(
     # that aren't residents (freight, through-traffic, visitors, survey
     # under-estimation) and degrades calibration rather than helping it.
     needs_more_demand = False
+    needs_less_demand = False   # counts say the sim is over-producing (uniform error only)
+    over_ratio = 1.0            # measured iqr_mean when over-producing
     plan_gen_ratio = 1.0    # measured plan-generator yield (1.0 = no measurement)
     stuck_fraction = 0.0    # measured stuck-agent fraction (0.0 = no measurement)
 
@@ -1596,27 +1630,90 @@ def recommend_adjustments(
             #                    bump PLUS a loud user-review diagnostic.
             IQR_OK = 0.70
             IQR_LOW = 0.50
+            # Over-production gate. Unlike the under-production side (which only
+            # ever compensates for measured losses), a decrease is a genuine
+            # correction — so it needs a second condition proving the error is
+            # actually global.
+            IQR_HIGH = 1.15     # above this, the sim is materially over-producing
+            CV_UNIFORM = 0.35   # per-station spread below this = uniform error
 
-            iqr_ok = iqr_mean_used >= IQR_OK
+            iqr_ok = IQR_OK <= iqr_mean_used <= IQR_HIGH
             iqr_catastrophic = iqr_mean_used < IQR_LOW
+
+            # Concentrated-vs-uniform test (G6). Written by the evaluator as
+            # station_ratio_cv. Without it we cannot tell "every station is
+            # 35% high" (one global lever fixes it) from "a few corridors are
+            # wildly high and the rest are fine" (a global lever makes things
+            # worse), so a missing CV blocks the decrease rather than guessing.
+            station_cv = eval_data.get("station_ratio_cv")
+            cv_known = station_cv is not None and station_cv > 0
+            cv_uniform = cv_known and float(station_cv) < CV_UNIFORM
+
+            if iqr_mean_used > IQR_HIGH:
+                over_ratio = iqr_mean_used
+                if cv_uniform:
+                    needs_less_demand = True
+                    recommendations.append({
+                        "parameter": "_info.counts_over_production",
+                        "current": (
+                            f"iqr_mean={iqr_mean_used:.1%}, "
+                            f"station_ratio_cv={float(station_cv):.3f} (uniform)"
+                        ),
+                        "recommended": f"reduce sf toward 1/{iqr_mean_used:.3f}",
+                        "reason": (
+                            f"Simulation is producing {iqr_mean_used:.0%} of observed "
+                            f"volumes and the per-station spread is uniform "
+                            f"(CV {float(station_cv):.3f} < {CV_UNIFORM}), so every "
+                            f"station is off by roughly the same factor. That is the "
+                            f"one case where a single global lever is the right tool. "
+                            f"Recommending a capped scaling_factor reduction below."
+                        ),
+                    })
+                else:
+                    cv_txt = (f"station_ratio_cv={float(station_cv):.3f}"
+                              if cv_known else "station_ratio_cv not recorded")
+                    recommendations.append({
+                        "parameter": "_info.over_production_not_uniform",
+                        "current": f"iqr_mean={iqr_mean_used:.1%}, {cv_txt}",
+                        "recommended": "no automatic scaling_factor reduction",
+                        "reason": (
+                            f"Simulation is over-producing ({iqr_mean_used:.0%}) but the "
+                            f"error is NOT uniform across stations"
+                            + (f" (CV {float(station_cv):.3f} >= {CV_UNIFORM})"
+                               if cv_known else
+                               " (CV not recorded by this run's evaluator)")
+                            + f". Lowering scaling_factor globally would pull down the "
+                            f"stations that are already correct while leaving the "
+                            f"concentrated excess in place. Fix the spatial "
+                            f"distribution first (OD source, boundary policy, "
+                            f"network/counts matching), then re-check."
+                        ),
+                    })
 
             # Always report what we measured, regardless of decision.
             recommendations.append({
                 "parameter": "_info.station_ratio_summary",
                 "current": (
                     f"iqr_mean={iqr_mean_used:.1%} ({iqr_source}), "
-                    f"mean_pct_error={mean_pct_error:.1f}%, "
+                    f"station_ratio_cv="
+                    + (f"{float(station_cv):.3f}" if cv_known else "n/a")
+                    + f", mean_pct_error={mean_pct_error:.1f}%, "
                     f"GEH<5={geh_lt_5:.1f}%, "
                     f"stations<10%={num_below_10} ({pct_below_10:.0f}%)"
                 ),
-                "recommended": f"iqr_mean >= {IQR_OK:.0%}",
+                "recommended": f"{IQR_OK:.0%} <= iqr_mean <= {IQR_HIGH:.0%}",
                 "reason": (
                     f"Interquartile mean of per-station sim/obs ratios drops "
                     f"the worst & best 25% of stations and averages the middle 50%. "
                     f"Robust to boundary stations with through-traffic from outside "
-                    f"the modeled area. mean_pct_error and GEH<5 are reported for "
-                    f"context but are volume-weighted and dominated by a few "
-                    f"boundary outliers, so they do not gate sf decisions."
+                    f"the modeled area. station_ratio_cv is the concentrated-vs-"
+                    f"uniform test: below {CV_UNIFORM} the error is global and a "
+                    f"scaling_factor change is the right lever; above it the error "
+                    f"sits on particular corridors and a global multiplier would "
+                    f"make the already-correct stations worse. mean_pct_error and "
+                    f"GEH<5 are reported for context but are volume-weighted and "
+                    f"dominated by a few boundary outliers, so they do not gate "
+                    f"sf decisions."
                 ),
             })
             recommendations.append({
@@ -1638,11 +1735,15 @@ def recommend_adjustments(
                 ),
             })
 
-            if not iqr_ok:
+            if iqr_mean_used < IQR_OK:
                 # Counts say there is room for more agents — but only as far
                 # as measured simulation losses justify. The sf math after
                 # the rate-levers section caps the change at +0.03 absolute
                 # and 0.13 ceiling (i.e. stays in the ~10% sample band).
+                # Keyed on being genuinely BELOW target, not merely outside
+                # the band: iqr_ok is now two-sided, so `not iqr_ok` is also
+                # true when the sim is over-producing, which must not request
+                # *more* demand.
                 needs_more_demand = True
 
             if iqr_catastrophic:
@@ -1676,7 +1777,7 @@ def recommend_adjustments(
                         f"or the network will gridlock — review the run manually."
                     ),
                 })
-            elif not iqr_ok:
+            elif iqr_mean_used < IQR_OK:
                 # Moderate: just say what's happening, no loud header needed.
                 recommendations.append({
                     "parameter": "_info.iqr_moderate_low",
@@ -1700,7 +1801,7 @@ def recommend_adjustments(
     # comment above already says this; the previous logic ran rate levers
     # anyway, producing tiny (+0.01) noise recommendations and risking
     # over-target trips/capita. We now split the paths cleanly.
-    if tpc >= target_low and not needs_more_demand:
+    if tpc >= target_low and not needs_more_demand and not needs_less_demand:
         return recommendations  # demand genuinely looks OK (and no experiment contradicts it)
 
     # Population pieces used by both paths.
@@ -1773,12 +1874,25 @@ def recommend_adjustments(
     #   (b) Rate-levers path (tpc too low): the rate bumps above raise
     #       trips/capita; if a residual gap remains, nudge sf up by the
     #       same small amount and capped the same way.
-    SF_STEP_MAX = 0.03   # max absolute step per iteration
+    #   (c) needs_less_demand from the over-production gate: counts say the sim
+    #       is materially above observed AND the per-station spread is uniform,
+    #       so a single global lever is valid. Unlike (a) this is a real
+    #       correction rather than loss compensation, but it is held to the same
+    #       step cap so no single noisy evaluation can move sf far.
+    SF_STEP_MAX = 0.03   # max absolute step per iteration (either direction)
     SF_CEILING = 0.13    # max absolute sf value the estimator will write
+    SF_FLOOR = 0.02      # min absolute sf value the estimator will write
 
     current_sf = estimate["scaling"]["scaling_factor"]
+    # The ceiling must never drag a healthy larger sf downward: it caps
+    # increases, so anchor it at or above the value already in use.
+    sf_ceiling = max(SF_CEILING, current_sf)
 
-    if needs_more_demand:
+    if needs_less_demand:
+        # Direct correction: sf_new = sf * (1 / over_ratio) brings simulated
+        # volumes to ~1.0x observed if the error really is global.
+        proposed_sf = current_sf / over_ratio if over_ratio > 0 else current_sf
+    elif needs_more_demand:
         # Compensation = inverse of the measured deployment yield.
         # plan_gen_ratio  = generated_plans / estimated_plans   (typically 0.7-1.0)
         # stuck_fraction  = stuck_agents   / simulated_persons   (typically 0-0.05)
@@ -1797,12 +1911,32 @@ def recommend_adjustments(
         else:
             proposed_sf = current_sf
 
-    # Apply the band: never more than +SF_STEP_MAX above current, and never
-    # above the SF_CEILING absolute cap.
-    capped_sf = min(proposed_sf, current_sf + SF_STEP_MAX, SF_CEILING)
+    # Apply the band symmetrically: never more than SF_STEP_MAX away from the
+    # current value in either direction, and always within [SF_FLOOR, ceiling].
+    capped_sf = min(proposed_sf, current_sf + SF_STEP_MAX, sf_ceiling)
+    capped_sf = max(capped_sf, current_sf - SF_STEP_MAX, SF_FLOOR)
     new_sf = round(capped_sf, 3)
 
-    if new_sf > current_sf + 0.001:
+    if needs_less_demand and new_sf < current_sf - 0.001:
+        recommendations.append({
+            "parameter": "plan_generation.scaling_factor",
+            "current": current_sf,
+            "recommended": new_sf,
+            "reason": (
+                f"Counts-driven reduction: simulation is at {over_ratio:.0%} of "
+                f"observed volumes with a uniform per-station spread, so the "
+                f"excess is global. Full correction would be "
+                f"{current_sf:.3f}/{over_ratio:.3f} = {proposed_sf:.3f}; capped to "
+                f"{new_sf:.3f} (max step {SF_STEP_MAX}, floor {SF_FLOOR}). "
+                f"flowCapacityFactor ({flow_cap}) and storageCapacityFactor "
+                f"({storage_cap}) are UNCHANGED — lowering sf reduces demand, "
+                f"which cannot gridlock a network sized for the larger sample. "
+                f"countsScaleFactor will auto-adjust to 1/{new_sf} = {1/new_sf:.1f}. "
+                f"Re-run and re-check: if the step cap kept this short of the full "
+                f"correction, the next iteration continues closing the gap."
+            ),
+        })
+    elif new_sf > current_sf + 0.001:
         if needs_more_demand:
             reason = (
                 f"Compensation-only sf bump: deployment_yield = "
@@ -2359,14 +2493,9 @@ def main():
             try:
                 with open(summary_file, "r") as f:
                     summary = json.load(f)
-                eval_file = exp_dir / "evaluation" / "summary_metrics.json"
-                eval_data = None
-                if eval_file.is_file():
-                    with open(eval_file, "r") as f:
-                        eval_data = json.load(f)
                 experiment_feedback = {
                     "summary": summary,
-                    "evaluation": eval_data,
+                    "evaluation": read_evaluation_metrics(exp_dir, summary),
                     "experiment_dir": str(exp_dir),
                 }
             except (json.JSONDecodeError, OSError) as e:
