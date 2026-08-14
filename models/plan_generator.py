@@ -39,7 +39,13 @@ from models.od_matrix_v3 import (
     create_survey_od_matrix_using_trip_weight,
     combine_od_matrices,
     blend_survey_od_matrices,
-    generate_samples
+    generate_samples,
+    DISTANCE_COSINE_KM,
+    SOURCE_AUTO,
+    SOURCE_LODES_OD,
+    SOURCE_GRAVITY,
+    VALID_OD_SOURCES,
+    FRICTION_POWER,
 )
 from models.models import initialize_tables
 from models.mode_choice import ModeChoiceModel, Leg
@@ -467,19 +473,40 @@ class _BasePlanGenerator:
                 if len(activities) < 2:
                     return False
 
-                # Get departure time for leaving first activity
-                # If chain contains Work, use Home→Work departure time (work commute)
-                # Otherwise, use actual first trip departure time
-                if self._has_work_activity(activities):
-                    # This is a work commute - use Home→Work departure time
+                # Get departure time for leaving the first activity.
+                #
+                # The first departure must be sampled from the distribution of
+                # the trip the agent is ACTUALLY making. Using the Home→Work
+                # distribution for every chain that merely *contains* Work
+                # over-peaks the whole model: Home→Work departures are 42.6%
+                # concentrated in 7-8am against 13.2% for trips generally, and
+                # 61% of chains contain Work. Chains such as
+                # Home→Shopping→Work then leave home at commute time even
+                # though their first trip is a shopping trip, which loads the
+                # network in the peak and empties the rest of the day.
+                #
+                # Set time_models.first_departure_from_actual_trip=false to
+                # restore the old behaviour for an A/B comparison.
+                use_actual = self.config.get('time_models', {}).get(
+                    'first_departure_from_actual_trip', True)
+                if not use_actual and self._has_work_activity(activities):
                     first_depart_min, _ = self.time_model.sample_dep_arr_time(
                         BaseSurveyTrip.ACT_HOME, BaseSurveyTrip.ACT_WORK, n_samples=1
                     )
                 else:
-                    # Not a work trip - use actual first trip
-                    first_depart_min, _ = self.time_model.sample_dep_arr_time(
-                        activities[0].type, activities[1].type, n_samples=1
-                    )
+                    # The trip actually being made. sample_dep_arr_time raises
+                    # when a pair has too few survey samples to fit a KDE, so
+                    # fall back to Home→Work rather than letting the retry loop
+                    # discard the agent — a rare pair must not cost us a trip.
+                    try:
+                        first_depart_min, _ = self.time_model.sample_dep_arr_time(
+                            activities[0].type, activities[1].type, n_samples=1
+                        )
+                    except ValueError:
+                        first_depart_min, _ = self.time_model.sample_dep_arr_time(
+                            BaseSurveyTrip.ACT_HOME, BaseSurveyTrip.ACT_WORK,
+                            n_samples=1
+                        )
                 first_depart_min = first_depart_min[0]
 
                 # Validate: ensure departure happens during the day
@@ -928,6 +955,10 @@ class PlanGenerator(_BasePlanGenerator):
             self.geo_level = BaseSurveyTrip.GEO_BLOCK_GROUP
         logger.info(f"  Detected survey geo level: {self.geo_level}")
 
+        # Observed LODES OD flows, populated by _measure_observed_od when the
+        # OD matrix is built. Stays None if observed OD is unavailable.
+        self._observed_od = None
+
         # Initialize models — blended wrappers when multiple sources are active
         logger.info("Initializing statistical models...")
         if self.survey_manager.has_multiple_sources():
@@ -1163,7 +1194,16 @@ class PlanGenerator(_BasePlanGenerator):
         When multiple surveys are configured, per-source survey OD matrices
         are built (only from sources with location data) and blended via
         ``blend_survey_od_matrices`` before combining with the gravity model.
+
+        Writes ``od_matrix_diagnostics.json`` describing the matrix that was
+        built — see ``docs/od_matrix/design.md``. Observed LODES
+        OD is loaded alongside the gravity build purely for measurement, so a
+        gravity run reports the same fields (internal_share, aux share, agent
+        delta) that an observed-OD run does and the two diff mechanically.
         """
+        import time as _time
+        from utils.od_diagnostics import ODDiagnostics
+
         # Group blocks by block group for OD matrix
         home_locs_bg_dict = self._group_by_blockgroup(self.blockid2homelocs, is_home=True)
         work_locs_bg_dict = self._group_by_blockgroup(self.blockid2worklocs, is_home=False)
@@ -1171,17 +1211,47 @@ class PlanGenerator(_BasePlanGenerator):
         logger.info(f"  Aggregated to {len(home_locs_bg_dict)} home block groups")
         logger.info(f"  Aggregated to {len(work_locs_bg_dict)} work block groups")
 
-        # Create local OD matrix (gravity model)
         od_config = self.config.get('od_matrix', {})
-        result = create_local_od_matrix(
-            work_locs_bg_dict,
-            home_locs_bg_dict,
-            beta=od_config.get('beta', 1.5),
-            max_iterations=od_config.get('max_iterations', 200),
-            convergence_threshold=od_config.get('convergence_threshold', 0.03)
+        source_requested = od_config.get('source', SOURCE_AUTO)
+        if source_requested not in VALID_OD_SOURCES:
+            raise ValueError(
+                f"od_matrix.source must be one of {VALID_OD_SOURCES}, "
+                f"got {source_requested!r}"
+            )
+        diagnostics = ODDiagnostics(
+            source_requested=source_requested,
+            geo_level=self.geo_level,
         )
-        local_od_matrix = result['od_matrix']
         alpha = od_config.get('alpha', 0.1)
+
+        # Observed LODES OD is loaded first whichever source wins: under
+        # lodes_od/auto it *is* the matrix, and on the gravity path it still
+        # supplies internal_share, the aux share and the agent delta so both
+        # arms report identical diagnostic fields.
+        observed_matrix = self._load_observed_od(
+            diagnostics, home_locs_bg_dict, work_locs_bg_dict,
+            want_matrix=source_requested in (SOURCE_AUTO, SOURCE_LODES_OD),
+        )
+
+        if source_requested == SOURCE_LODES_OD and observed_matrix is None:
+            # Explicitly asked for observed flows and they are unavailable.
+            # Falling back silently would produce an estimated matrix under a
+            # config that demanded a measured one.
+            raise ValueError(
+                f"od_matrix.source is 'lodes_od' but observed OD could not be "
+                f"assembled: {diagnostics.data.get('fallback_reason')}. Use "
+                f"source='auto' to fall back to gravity automatically."
+            )
+
+        if observed_matrix is not None and source_requested in (SOURCE_AUTO, SOURCE_LODES_OD):
+            local_od_matrix = observed_matrix
+            diagnostics.set_source(SOURCE_LODES_OD)
+            base_matrix = local_od_matrix
+        else:
+            local_od_matrix = self._build_gravity_matrix(diagnostics, od_config,
+                                                         home_locs_bg_dict,
+                                                         work_locs_bg_dict)
+            base_matrix = local_od_matrix
 
         # Build survey OD matrix (possibly blended from multiple sources)
         if self._all_survey_data is not None:
@@ -1192,7 +1262,11 @@ class PlanGenerator(_BasePlanGenerator):
 
             if not loc_surveys:
                 logger.info("  No survey has location data — using gravity model only")
-                return local_od_matrix
+                return self._finalize_od_matrix(
+                    local_od_matrix, base_matrix, diagnostics,
+                    home_locs_bg_dict, work_locs_bg_dict,
+                    blend_branch='no_location_surveys', alpha=alpha,
+                )
 
             hw_query = (
                 f"{BaseSurveyTrip.ORIGIN_PURPOSE} == '{BaseSurveyTrip.ACT_HOME}' and "
@@ -1215,7 +1289,11 @@ class PlanGenerator(_BasePlanGenerator):
 
                 if not per_source_ods:
                     logger.info("  No survey H→W trips — using gravity model only")
-                    return local_od_matrix
+                    return self._finalize_od_matrix(
+                        local_od_matrix, base_matrix, diagnostics,
+                        home_locs_bg_dict, work_locs_bg_dict,
+                        blend_branch='no_survey_hw_trips', alpha=alpha,
+                    )
 
                 survey_od_matrix = blend_survey_od_matrices(
                     per_source_ods, self._blend_weights
@@ -1228,23 +1306,277 @@ class PlanGenerator(_BasePlanGenerator):
             )
             survey_od_matrix = create_survey_od_matrix_using_trip_weight(survey_hw_df)
 
+        # Did the survey actually contribute? combine_od_matrices trips a guard
+        # and returns the base matrix untouched when the survey is empty or
+        # all-zero, in which case alpha never applies (E3). Record which branch
+        # ran rather than presenting the blend as active when it is inert.
+        survey_is_empty = (
+            survey_od_matrix.empty or survey_od_matrix.to_numpy().sum() == 0
+        )
+        blend_branch = 'guard_tripped_empty_survey' if survey_is_empty else 'blended'
+
         # Combine survey and gravity matrices
+        _t_blend = _time.perf_counter()
         combined_matrix = combine_od_matrices(
             survey_od_matrix,
             local_od_matrix,
             alpha=alpha
         )
+        diagnostics.set_runtime('blend', _time.perf_counter() - _t_blend)
 
         logger.info(f"  Combined OD matrix shape: {combined_matrix.shape}")
         logger.info(f"  Total trips in matrix: {combined_matrix.sum().sum():,.0f}")
 
-        # Save the final combined OD matrix (gravity + survey) to the experiment folder
+        return self._finalize_od_matrix(
+            combined_matrix, base_matrix, diagnostics,
+            home_locs_bg_dict, work_locs_bg_dict,
+            blend_branch=blend_branch, alpha=alpha,
+        )
+
+    def _zone_sqrt_area(self, blockid_dict: Dict) -> Dict[str, float]:
+        """sqrt(zone area) in km per zone, from member block coordinates.
+
+        Feeds the intrazonal distance fix. Uses the home-side blocks, whose
+        spread describes where a zone's residents actually live.
+        """
+        from collections import defaultdict
+        from utils.od_diagnostics import zone_sqrt_area_km
+
+        _prefix_map = {BaseSurveyTrip.GEO_BLOCK_GROUP: 12, BaseSurveyTrip.GEO_TRACT: 11}
+        prefix_len = _prefix_map.get(self.geo_level, 12)
+
+        by_zone = defaultdict(list)
+        for block_id, data in blockid_dict.items():
+            lat, lon = data.get('lat'), data.get('lon')
+            if lat is not None and lon is not None:
+                by_zone[block_id[:prefix_len]].append((lon, lat))
+
+        return zone_sqrt_area_km(by_zone)
+
+    def _load_observed_od(self, diagnostics, home_locs_bg_dict: Dict,
+                          work_locs_bg_dict: Dict,
+                          want_matrix: bool) -> Optional[pd.DataFrame]:
+        """Load observed LODES OD flows, and optionally assemble the matrix.
+
+        Runs on every path. When *want_matrix* is False (source='gravity') it
+        loads flows for measurement only, so the gravity baseline still reports
+        internal_share, the aux share and the implied agent delta — that is what
+        makes a gravity run and an observed-OD run diffable on identical fields.
+
+        Returns the observed zone matrix when one was requested and could be
+        built, otherwise None. A failure is never fatal here: it is recorded as
+        a fallback reason and the caller decides what to do about it.
+        """
+        import time as _time
+        from data_sources.lodes_od import (
+            assemble_lodes_od, build_observed_od_matrix,
+            reconcile_with_direct_aggregation, LodesODUnavailable,
+        )
+
+        _t0 = _time.perf_counter()
+        matrix = None
+        try:
+            if want_matrix:
+                matrix, observed = build_observed_od_matrix(
+                    self.config,
+                    home_zones=sorted(home_locs_bg_dict.keys()),
+                    work_zones=sorted(work_locs_bg_dict.keys()),
+                    geo_level=self.geo_level,
+                    use_cache=self.config.get('od_matrix', {}).get('cache', True),
+                    # Needed when boundary_policy='anchor' to find the in-region
+                    # zone each boundary trip crosses at.
+                    home_zone_coords={z: d['centroid'] for z, d in home_locs_bg_dict.items()},
+                    work_zone_coords={z: d['centroid'] for z, d in work_locs_bg_dict.items()},
+                )
+                # G2 — the assembled matrix must reconcile with a direct
+                # aggregation of the flow table, or trips were lost in assembly.
+                diagnostics.update(
+                    reconciliation=reconcile_with_direct_aggregation(matrix, observed)
+                )
+            else:
+                observed = assemble_lodes_od(self.config)
+            diagnostics.set_runtime('observed_od_load', _time.perf_counter() - _t0)
+        except LodesODUnavailable as e:
+            # E8 — the whole region falls back rather than mixing observed flows
+            # for one state with estimated flows for another.
+            logger.warning(f"  Observed OD unavailable: {e}")
+            diagnostics.update(lodes={"error": str(e)})
+            diagnostics.data['fallback_reason'] = str(e)
+            return None
+        except Exception as e:  # noqa: BLE001 - never break the run on measurement
+            logger.warning(f"  Observed OD load failed unexpectedly: {e}")
+            diagnostics.update(lodes={"error": repr(e)})
+            diagnostics.data['fallback_reason'] = repr(e)
+            return None
+
+        diagnostics.update(**observed.as_diagnostics())
+
+        # E5 / G3 — boundary trips are accounted for in every run, whether they
+        # were anchored back onto the network or explicitly counted as dropped.
+        boundary = {
+            "policy": self.config.get('od_matrix', {}).get('boundary_policy', 'drop'),
+            "outbound_ie": observed.totals.outbound_ie,
+            "inbound_ei": observed.totals.inbound_ei,
+            "internal_share": observed.totals.internal_share,
+        }
+        # build_observed_od_matrix records what the policy actually did; on the
+        # gravity path (flows loaded for measurement only) no policy ran.
+        boundary.update(getattr(observed, 'boundary_stats', None) or {})
+        diagnostics.update(boundary=boundary)
+
+        self._observed_od = observed
+        return matrix
+
+    def _build_gravity_matrix(self, diagnostics, od_config: Dict,
+                              home_locs_bg_dict: Dict,
+                              work_locs_bg_dict: Dict) -> pd.DataFrame:
+        """Build the estimated OD matrix with the gravity model + IPF."""
+        import time as _time
+
+        # Zone extents for the intrazonal distance fix. Derived from the member
+        # block points already loaded — Census area is only stored per county.
+        zone_sqrt_area = self._zone_sqrt_area(self.blockid2homelocs)
+        distance_mode = od_config.get('distance', DISTANCE_COSINE_KM)
+        intrazonal_factor = od_config.get('intrazonal_factor', 0.5)
+        friction_form = od_config.get('friction', FRICTION_POWER)
+        beta = od_config.get('beta', 1.5)
+
+        _t0 = _time.perf_counter()
+        result = create_local_od_matrix(
+            work_locs_bg_dict,
+            home_locs_bg_dict,
+            beta=beta,
+            max_iterations=od_config.get('max_iterations', 200),
+            convergence_threshold=od_config.get('convergence_threshold', 0.03),
+            distance_mode=distance_mode,
+            intrazonal_factor=intrazonal_factor,
+            zone_sqrt_area=zone_sqrt_area,
+            friction_form=friction_form,
+            gamma_alpha=od_config.get('gamma_alpha', 1.0),
+        )
+        diagnostics.update(distance={
+            "mode": distance_mode,
+            "intrazonal_factor": intrazonal_factor if distance_mode == DISTANCE_COSINE_KM else None,
+            "zones_with_area": len(zone_sqrt_area),
+        }, friction={
+            "form": friction_form,
+            "beta": beta,
+            # beta's units change with the form: 1/km for the bounded forms,
+            # dimensionless for the legacy power law.
+            "beta_units": "1/km" if friction_form != FRICTION_POWER else "dimensionless",
+        })
+        diagnostics.set_source(SOURCE_GRAVITY,
+                               fallback_reason=diagnostics.data.get('fallback_reason'))
+        diagnostics.set_runtime('assemble', _time.perf_counter() - _t0)
+        return result['od_matrix']
+
+    def _finalize_od_matrix(self, matrix: pd.DataFrame, base_matrix: pd.DataFrame,
+                            diagnostics, home_locs_bg_dict: Dict,
+                            work_locs_bg_dict: Dict, blend_branch: str,
+                            alpha: float) -> pd.DataFrame:
+        """Record matrix diagnostics, save artefacts, and return the matrix.
+
+        Every exit path from _generate_od_matrix runs through here, so no run
+        can finish without a diagnostics file — that is what makes any two runs
+        comparable.
+        """
+        from data_sources.lodes_od import matrix_stats
+        from utils.od_diagnostics import trip_length_stats
+
+        od_config = self.config.get('od_matrix', {})
+
+        home_residents = {z: d['n_employees'] for z, d in home_locs_bg_dict.items()}
+        work_jobs = {z: d['n_employees'] for z, d in work_locs_bg_dict.items()}
+        home_coords = {z: d['centroid'] for z, d in home_locs_bg_dict.items()}
+        work_coords = {z: d['centroid'] for z, d in work_locs_bg_dict.items()}
+
+        # Did the blend actually move any trips? The 'blended' branch can still
+        # be a no-op when the survey's cells do not overlap the base matrix, and
+        # reporting an active blend in that case overstates the survey's role.
+        cells_changed = 0
+        if blend_branch == 'blended' and matrix.shape == base_matrix.shape:
+            a, b = matrix.align(base_matrix, fill_value=0)
+            cells_changed = int((np.abs(a.to_numpy() - b.to_numpy()) > 0.5).sum())
+
+        diagnostics.update(
+            matrix=matrix_stats(matrix, home_residents, work_jobs),
+            trip_length=trip_length_stats(matrix, home_coords, work_coords),
+            survey_blend={
+                "branch": blend_branch,
+                "alpha_configured": alpha,
+                # alpha only bites on the 'blended' branch; every other branch
+                # returns the base matrix untouched whatever alpha says.
+                "alpha_effective": alpha if blend_branch == 'blended' else 0.0,
+                # ...and even on that branch it may change nothing, if the
+                # survey covers no cell the base matrix also carries.
+                "cells_changed": cells_changed,
+                "effective_no_op": blend_branch == 'blended' and cells_changed == 0,
+            },
+        )
+        if blend_branch == 'blended' and cells_changed == 0:
+            logger.warning(
+                "  Survey blend ran but changed no cells — the survey's H->W "
+                "trips do not overlap the base matrix. alpha=%.2f had no "
+                "practical effect.", alpha
+            )
+
+        # E1 — the agent-count delta, always reported so both arms carry it.
+        #
+        # The gravity baseline is the total employed residents, because that is
+        # what a doubly-constrained gravity matrix always sums to: it gives a
+        # work trip to *every* employed resident, including those who commute
+        # out of the region. Using that rather than base_matrix.sum() keeps the
+        # field meaningful on the observed path too, where base_matrix is the
+        # observed matrix and comparing it to itself would report a flat 1.0.
+        gravity_total = float(sum(home_residents.values()))
+        diagnostics.set_comparison_to_gravity(gravity_total, float(matrix.sum().sum()))
+
+        observed = getattr(self, '_observed_od', None)
+        if observed is not None:
+            implied = observed.totals.internal_ii
+            ratio = implied / gravity_total if gravity_total else None
+            diagnostics.data["comparison_to_gravity_base"].update({
+                "observed_ii_total": implied,
+                "observed_vs_gravity_ratio": round(ratio, 4) if ratio else None,
+                "implied_agent_delta_pct": round((ratio - 1) * 100, 2) if ratio else None,
+                # The drop is the boundary-flow share: those residents work
+                # outside the region, so observed OD gives them no in-region
+                # work trip. Kept deliberately — see E1.
+                "internal_share": observed.totals.internal_share,
+            })
+            if ratio:
+                logger.info(
+                    f"  Observed I-I gives {implied:,} trips vs {gravity_total:,.0f} "
+                    f"employed residents ({(ratio - 1) * 100:+.2f}% agents) — E1"
+                )
+
+        # scaling_factor is NOT tuned during stages 0-5; record what it is and
+        # that no compensation was applied, so the decision stays explicit (E1).
+        plan_config = self.config.get('plan_generation', {})
+        diagnostics.update(demand_coverage={
+            "scaling_factor": plan_config.get('scaling_factor'),
+            "work_scaling_multiplier": plan_config.get('work_scaling_multiplier', 1.0),
+            "compensation_applied": False,
+            "note": ("agent drop kept deliberately: observed flows give a work "
+                     "trip only to residents who work in-region, so the gravity "
+                     "model's extra agents were invented — see design.md §2"),
+        })
+
         experiment_dir = get_current_experiment_dir()
+
+        # Save the pre-blend base matrix alongside the combined one. Without it
+        # the blend's contribution cannot be isolated after the fact.
+        base_path = experiment_dir / "base_od_matrix.csv"
+        base_matrix.to_csv(base_path)
+        logger.info(f"  Saved base (pre-blend) OD matrix to: {base_path}")
+
         combined_matrix_path = experiment_dir / "combined_od_matrix.csv"
-        combined_matrix.to_csv(combined_matrix_path)
+        matrix.to_csv(combined_matrix_path)
         logger.info(f"  Saved combined OD matrix to: {combined_matrix_path}")
 
-        return combined_matrix
+        diagnostics.write(experiment_dir)
+
+        return matrix
 
     def _group_by_blockgroup(self, blockid_dict: Dict, is_home: bool = True) -> Dict:
         """Group blocks by census geography zone and calculate centroids.
