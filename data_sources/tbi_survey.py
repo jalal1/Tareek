@@ -237,8 +237,17 @@ class TBISurveyTrip(BaseSurveyTrip):
             logger.info(f"After distance filter: {len(df)} records ({before - len(df)} removed)")
 
             # ── Timezone conversion ──────────────────────────────────────
+            # TBI publishes times as UTC ("...Z"), so they must be converted to
+            # the region's local time before any hour-of-day analysis — an
+            # unconverted US Central trip appears 5-6 hours late, which turns
+            # the afternoon peak into a late-evening one and puts real evening
+            # travel after midnight.
+            #
+            # The tz offset is then dropped so the stored value is local wall
+            # clock. Without this the database normalises a tz-aware timestamp
+            # back to UTC on write, silently undoing the conversion above.
             for col in ['arrive_time', 'depart_time']:
-                df[col] = df[col].dt.tz_convert(timezone)
+                df[col] = df[col].dt.tz_convert(timezone).dt.tz_localize(None)
 
             # ── Clean block group IDs ────────────────────────────────────
             for col in ['o_bg_2020', 'd_bg_2020']:
