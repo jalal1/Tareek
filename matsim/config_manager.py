@@ -73,6 +73,46 @@ class ConfigManager:
         tree = ET.parse(template_path)
         return tree
 
+    def _set_or_add_parameter(
+        self,
+        tree: ET.ElementTree,
+        module_name: str,
+        param_name: str,
+        param_value: str
+    ):
+        """Set a parameter, creating it if the template does not define it.
+
+        Unlike update_parameter, a missing param is not an error here. Some
+        templates leave optional MATSim settings out (or commented out), in
+        which case MATSim applies its own default silently. For settings where
+        that default is undesirable — per-iteration output being the case in
+        point — the value has to be written explicitly regardless of which
+        template revision is deployed.
+        """
+        root = tree.getroot()
+
+        target_module = None
+        for module in root.findall('module'):
+            if module.get('name') == module_name:
+                target_module = module
+                break
+
+        if target_module is None:
+            logger.warning(
+                f"Module '{module_name}' not in template; cannot set "
+                f"'{param_name}'"
+            )
+            return
+
+        for param in target_module.findall('param'):
+            if param.get('name') == param_name:
+                param.set('value', param_value)
+                return
+
+        ET.SubElement(target_module, 'param',
+                      {'name': param_name, 'value': param_value})
+        logger.debug(f"Added missing param {module_name}.{param_name} = {param_value}")
+
     def update_parameter(
         self,
         tree: ET.ElementTree,
@@ -365,7 +405,34 @@ class ConfigManager:
 
         # Auto-set writeLinkStatsInterval to lastIteration (write stats only at final iteration)
         self.update_parameter(tree, 'linkStats', 'writeLinkStatsInterval', str(last_iteration))
-        logger.info(f"Auto-set linkStats.writeLinkStatsInterval = {last_iteration} (matches lastIteration)")
+        logger.info(f"Auto-set writeLinkStatsInterval = {last_iteration} (matches lastIteration)")
+
+        # Per-iteration output is expensive and mostly unread. At 15-county
+        # scale MATSim writes a 256 MB compressed plans file EVERY iteration
+        # (~40 s each), plus trips/legs/activities tables and PNG histograms.
+        # Only the final iteration is normally looked at, so by default write
+        # the bulky artefacts once at the end. Measured: roughly 79% of an
+        # iteration's wall time is replanning + output, not the traffic
+        # simulation itself.
+        #
+        # Set matsim.write_intermediate_output = true to restore MATSim's
+        # default of writing everything every iteration (useful when debugging
+        # how plans evolve across iterations).
+        write_intermediate = self.matsim_config.get('write_intermediate_output', False)
+        if not write_intermediate:
+            # These params may be absent or commented out in a template, in
+            # which case MATSim silently defaults to writing every iteration.
+            # Set them explicitly, creating them when missing, so the behaviour
+            # does not depend on which template revision is deployed.
+            for param in ('writePlansInterval', 'writeEventsInterval',
+                          'writeSnapshotsInterval'):
+                self._set_or_add_parameter(tree, 'controller', param,
+                                           str(last_iteration))
+            logger.info(
+                f"Auto-set write*Interval = {last_iteration} (bulky per-iteration "
+                f"output written only at the final iteration; set "
+                f"matsim.write_intermediate_output=true to write every iteration)"
+            )
 
         # Handle counts module based on counts config
         counts_config = self.config.get('counts', {})
