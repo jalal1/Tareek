@@ -14,6 +14,15 @@ from utils.duckdb_manager import DBManager
 
 logger = logging.getLogger(__name__)
 
+# County FIPS codes are pinned to the same Census vintage as the block GEOIDs
+# stored in home_locations / work_locations (2020, per LODES8). Without the pin
+# pygris returns the newest TIGER release, whose county codes need not match:
+# Connecticut abolished its 8 counties (09001-09015) in favour of 9 planning
+# regions (09110-09190) effective 2022, with *no* overlap between the two sets.
+# A 2020 block GEOID's county digits would then resolve to nothing, which is
+# how boundary trips through Connecticut ended up unplaceable.
+_COUNTY_VINTAGE_YEAR = 2020
+
 
 def ensure_counties_in_db(geoids: List[str], db_manager: DBManager) -> None:
     """Fetch and insert any GEOIDs (and their parent states) missing from the DB via pygris."""
@@ -56,7 +65,8 @@ def ensure_counties_in_db(geoids: List[str], db_manager: DBManager) -> None:
         logger.info(f"Auto-fetching {len(missing_counties)} missing counties from pygris: {missing_counties}")
         for state_fips in {g[:2] for g in missing_counties}:
             try:
-                gdf = get_counties(state=state_fips, cache=True)
+                gdf = get_counties(state=state_fips, cache=True,
+                                   year=_COUNTY_VINTAGE_YEAR)
                 for _, row in gdf.iterrows():
                     if row['GEOID'] in missing_counties:
                         counties_to_add.append(County(

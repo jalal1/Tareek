@@ -7,7 +7,7 @@
     ]
   },
   "data": {
-    "data_dir": "/home/exouser/Documents/twin-cities-sim/data",
+    "data_dir": "/home/exouser/Documents/Tareek/data",
     "census_api_key": "YOUR_CENSUS_API_KEY_HERE",
     "_census_api_key_help": "Free API key from https://api.census.gov/data/key_signup.html. Used by demand_estimator.py to fetch ACS commute data (B08301, B08303) for calibration",
     "lodes": {
@@ -159,11 +159,23 @@
     "chain_sampling_method": "generated",
     "max_chain_retries": 10,
     "num_processes": 30,
-    "default_mode": "car"
+    "default_mode": "car",
+    "cache_demand": true
   },
   "od_matrix": {
+    "source": "auto",
+    "_source_help": "auto (default) prefers observed LODES OD and falls back to the gravity model with a loud log line when the region has no LODES coverage; lodes_od requires observed flows and fails if absent; gravity forces the estimated model",
+    "boundary_policy": "anchor",
+    "_boundary_policy_help": "drop (interim) discards I-E/E-I commutes and reports the counts; anchor re-points the out-of-region end at the in-region zone the trip crosses, so the in-region leg still loads the network. Anchor is the decided target (proposal D4) - switch once stage 3 is validated against counts",
     "alpha": 0.1,
+    "friction": "power",
+    "_friction_help": "power (legacy default) is d^-beta - unbounded as distance approaches zero, which is the dominant gravity defect; exponential exp(-beta*d) and gamma d^alpha*exp(-beta*d) are bounded. Bounded forms need distance='cosine_km' and a refitted beta in 1/km - see scripts/fit_gravity_beta.py",
     "beta": 1.5,
+    "_beta_help": "distance decay. Units depend on friction: dimensionless for power, 1/km for exponential/gamma. Refit per form.",
+    "distance": "cosine_km",
+    "_distance_help": "cosine_km (default) measures pair distances in km with a latitude cosine correction and sets intrazonal distance from zone area; legacy_degrees reproduces pre-stage-1 behaviour (raw degrees, 0.1deg zero-guard) for ablation arm A",
+    "intrazonal_factor": 0.5,
+    "_intrazonal_factor_help": "intrazonal distance = factor * sqrt(zone area); zone area is estimated from the spread of member block points",
     "max_iterations": 200,
     "convergence_threshold": 0.03
   },
@@ -235,9 +247,9 @@
     "max_travel_buffer_minutes": 180,
     "min_evening_home_minutes": 0,
     "trim_jitter_minutes": 15,
-    "_trim_jitter_minutes_help": "Random jitter (±minutes) added to trimmed activity durations to prevent departure clustering. 0 = no jitter",
+    "_trim_jitter_minutes_help": "Random jitter (\u00b1minutes) added to trimmed activity durations to prevent departure clustering. 0 = no jitter",
     "departure_jitter_minutes": 5,
-    "_departure_jitter_minutes_help": "Random jitter (±minutes) added to first departure time to prevent clustering at KDE peaks. 0 = no jitter"
+    "_departure_jitter_minutes_help": "Random jitter (\u00b1minutes) added to first departure time to prevent clustering at KDE peaks. 0 = no jitter"
   },
   "poi_assignment": {
     "initial_radius_m": 2000,
@@ -308,8 +320,8 @@
       "outputDirectory": "output",
       "global.numberOfThreads": 30,
       "qsim.numberOfThreads": 30,
-      "qsim.flowCapacityFactor": 0.1,
-      "qsim.storageCapacityFactor": 0.12,
+      "qsim.flowCapacityFactor": 0.11,
+      "qsim.storageCapacityFactor": 0.11,
       "linkStats.averageLinkStatsOverIterations": 5,
       "scoring.modeParams.pt.constant": 1,
       "_estimator_scoring.modeParams.pt.constant": "Cold start (no prior experiment). ACS transit share 10.70% (high-transit (10%-30%)). Seeding pt.constant=+0.5; subsequent runs with --experiment-dir will correct toward ACS using the clamped log-ratio update.",
@@ -325,7 +337,8 @@
       "_estimator_transitRouter.maxBeelineWalkConnectionDistance": "Cold start (no prior experiment). ACS transit share 10.70% (high transit (10%-30%)). Seeding transit-router params from tier table; subsequent runs with --experiment-dir adjust by one tier when realised PT share is outside [70%, 130%] of the ACS target. Setting maxBeelineWalkConnectionDistance=350.0.",
       "transitRouter.directWalkFactor": 2,
       "_estimator_transitRouter.directWalkFactor": "Cold start (no prior experiment). ACS transit share 10.70% (high transit (10%-30%)). Seeding transit-router params from tier table; subsequent runs with --experiment-dir adjust by one tier when realised PT share is outside [70%, 130%] of the ACS target. Setting directWalkFactor=1.8."
-    }
+    },
+    "write_intermediate_output": false
   },
   "counts": {
     "enabled": true,
@@ -351,7 +364,15 @@
     "run_evaluation": true,
     "ground_truth_data_dir": "data/evaluation",
     "generate_spatial_maps": true,
-    "generate_per_device_reports": true
+    "generate_per_device_reports": true,
+    "report_tolerances": {
+      "volume_ratio_band": 0.1,
+      "trips_per_person_band": 0.1,
+      "station_cv_uniform": 0.35,
+      "correlation_min": 0.85,
+      "geh_lt5_pct_min": 85.0,
+      "mode_share_flag_pp": 2.0
+    }
   },
   "nonwork_purposes": {
     "nonwork_trip_share": 0.8,

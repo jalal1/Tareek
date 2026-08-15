@@ -886,7 +886,7 @@ class NonWorkPlanGenerator:
         # Initialize coordinate converter
         utm_epsg = config['coordinates']['utm_epsg']
         self.coord_converter = CoordinateConverter(utm_epsg=utm_epsg)
-        logger.info(f"  Coordinate system: WGS84 → {utm_epsg}")
+        logger.info(f"  Coordinate system: WGS84 -> {utm_epsg}")
 
         # Load or use shared data
         if shared_data is not None:

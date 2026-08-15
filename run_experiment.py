@@ -282,6 +282,135 @@ class ExperimentRunner:
             logger.warning(f"Network file validation failed: {e}")
             return False
 
+    # Config sections that change the generated demand. Anything listed here
+    # is part of the cache key; a change to any of it must miss the cache.
+    _DEMAND_CACHE_SECTIONS = (
+        'region',            # which counties
+        'od_matrix',         # source, friction, distance, boundary policy, beta...
+        'plan_generation',   # scaling factor, target plans, seed
+        'nonwork_purposes',  # non-work trip rates and betas
+        'chains',            # activity chains
+        'time_models',       # departure times
+        'modes',             # mode availability
+        'mode_choice',       # mode choice parameters
+        'poi_assignment',
+        'duration_constraints',
+    )
+
+    def _demand_cache_key(self) -> str:
+        """Fingerprint of every config value that affects the generated demand.
+
+        Deliberately conservative: it hashes whole config sections rather than
+        a hand-picked list of keys, so a newly added parameter cannot silently
+        fall outside the key and serve stale plans. Keys starting with '_' are
+        ignored because they are documentation, not behaviour.
+        """
+        import hashlib
+        import json as _json
+
+        def strip_help(obj):
+            if isinstance(obj, dict):
+                return {k: strip_help(v) for k, v in sorted(obj.items())
+                        if not str(k).startswith('_')}
+            if isinstance(obj, list):
+                return [strip_help(v) for v in obj]
+            return obj
+
+        payload = {s: strip_help(self.config.get(s, {}))
+                   for s in self._DEMAND_CACHE_SECTIONS}
+        # LODES year/job_type change the underlying flows, so include them too.
+        payload['lodes'] = strip_help(self.config.get('data', {}).get('lodes', {}))
+
+        blob = _json.dumps(payload, sort_keys=True, default=str)
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+    def _demand_cache_dir(self) -> Path:
+        data_dir = self.config['data']['data_dir']
+        if not Path(data_dir).is_absolute():
+            data_dir = (self.config_path.parent / data_dir).resolve()
+        return Path(data_dir) / 'demand_cache'
+
+    def _try_reuse_cached_demand(self) -> bool:
+        """Copy a previously generated plans.xml in, when the inputs match.
+
+        Plan generation is the slow part of a run (~13 minutes at 15-county
+        scale), and it is fully determined by the config. When only downstream
+        settings change — simulation iterations, evaluation options — there is
+        no reason to rebuild the same demand.
+
+        Enabled with plan_generation.cache_demand = true. Off by default, so
+        no existing workflow silently starts reusing plans.
+        """
+        if not self.config.get('plan_generation', {}).get('cache_demand', False):
+            return False
+
+        key = self._demand_cache_key()
+        cached = self._demand_cache_dir() / f'plans_{key}.xml'
+
+        if not cached.exists():
+            logger.info(f"Demand cache: no entry for this configuration ({key})")
+            logger.info(f"  Will generate and store at: {cached}")
+            return False
+
+        if not self._validate_plans_file(cached):
+            logger.warning(f"Demand cache entry is invalid, regenerating: {cached}")
+            return False
+
+        import shutil
+        shutil.copy2(cached, self.plans_path)
+
+        size_mb = self.plans_path.stat().st_size / 1024 / 1024
+        logger.info("=" * 60)
+        logger.info("REUSING CACHED DEMAND")
+        logger.info("=" * 60)
+        logger.info(f"  Cache key : {key}")
+        logger.info(f"  Source    : {cached}")
+        logger.info(f"  Size      : {size_mb:.2f} MB")
+        logger.info("  Plan generation skipped - the config values that affect")
+        logger.info("  demand are unchanged since this was generated.")
+        logger.info("  (set plan_generation.cache_demand=false to force a rebuild)")
+        logger.info("")
+
+        # Carry the matching diagnostics across so the run still reports how
+        # its demand was built, rather than appearing to have none.
+        for artefact in ('od_matrix_diagnostics.json', 'combined_od_matrix.csv',
+                         'base_od_matrix.csv'):
+            src = cached.parent / f'{key}_{artefact}'
+            if src.exists():
+                shutil.copy2(src, self.experiment_dir / artefact)
+
+        self.plans_file_size_mb = round(size_mb, 2)
+        self.runtime['plans_start'] = datetime.now()
+        self.runtime['plans_end'] = datetime.now()
+        return True
+
+    def _store_cached_demand(self) -> None:
+        """Save the finished demand for reuse by later runs."""
+        if not self.config.get('plan_generation', {}).get('cache_demand', False):
+            return
+
+        try:
+            key = self._demand_cache_key()
+            cache_dir = self._demand_cache_dir()
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            target = cache_dir / f'plans_{key}.xml'
+
+            import shutil
+            shutil.copy2(self.plans_path, target)
+
+            # Keep the OD artefacts beside the plans so a cache hit can restore
+            # the full picture of how this demand was produced.
+            for artefact in ('od_matrix_diagnostics.json', 'combined_od_matrix.csv',
+                             'base_od_matrix.csv'):
+                src = self.experiment_dir / artefact
+                if src.exists():
+                    shutil.copy2(src, cache_dir / f'{key}_{artefact}')
+
+            logger.info(f"Demand cached for reuse: {target}")
+            logger.info(f"  Cache key: {key}")
+        except Exception as e:  # noqa: BLE001 - caching must never fail a run
+            logger.warning(f"Could not cache demand (run is unaffected): {e}")
+
     def _validate_plans_file(self, plans_path: Path) -> bool:
         """
         Validate that plans.xml exists and is valid
@@ -979,6 +1108,13 @@ class ExperimentRunner:
             # Set plans path
             self.plans_path = self.experiment_dir / 'plans.xml'
 
+            # Reuse demand from a previous experiment when the inputs that
+            # determine it have not changed. skip_if_exists only ever looks
+            # inside *this* experiment folder, and every run creates a fresh
+            # timestamped one, so it never fires across runs — this does.
+            if self._try_reuse_cached_demand():
+                return self.plans_path
+
             # Check if plans.xml already exists and skip_if_exists is enabled
             skip_if_exists = self.config['plan_generation'].get('skip_if_exists', False)
 
@@ -1196,6 +1332,10 @@ class ExperimentRunner:
             # Track plan generation end time
             self.runtime['plans_end'] = datetime.now()
 
+            # Save the finished demand so a later run with the same inputs can
+            # skip this step entirely.
+            self._store_cached_demand()
+
             return self.plans_path
 
         except Exception as e:
@@ -1350,8 +1490,11 @@ class ExperimentRunner:
             if summary_metrics['num_comparisons'] > 0:
                 logger.info(f"Mean Absolute Error (MAE): {summary_metrics['mae']:.2f} vehicles")
                 logger.info(f"Root Mean Square Error (RMSE): {summary_metrics['rmse']:.2f} vehicles")
-                logger.info(f"Mean GEH: {summary_metrics['mean_geh']:.2f}")
-                logger.info(f"GEH < 5 (good matches): {summary_metrics['geh_lt_5_pct']:.1f}%")
+                logger.info(f"GEH < 5 (hourly counts, target >=85%): "
+                            f"{summary_metrics['geh_lt_5_pct']:.1f}%")
+                if 'station_daily_geh_lt5_pct' in summary_metrics:
+                    logger.info(f"GEH < 5 (station daily totals): "
+                                f"{summary_metrics['station_daily_geh_lt5_pct']:.1f}%")
                 logger.info(f"Correlation: {summary_metrics['correlation']:.3f}")
                 logger.info(f"Peak-hour correlation (6-9,15-18): {summary_metrics.get('peak_hour_correlation', 0):.3f}")
                 logger.info("")
@@ -1406,6 +1549,22 @@ class ExperimentRunner:
             evaluation_metrics=evaluation_metrics,
         )
 
+        # Demand validation vs the household travel survey. This is a separate
+        # question from the count validation above: counts validate how demand
+        # was assigned to the network, this validates the demand itself. It
+        # reads MATSim's per-trip output, so it needs no extra simulation, and
+        # it returns None rather than raising when survey or trip data is
+        # missing — a run must still complete without it.
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent / 'scripts'))
+            from validate_demand import compute_demand_validation, to_summary_section
+            demand_results = compute_demand_validation(self.experiment_dir)
+            if demand_results is not None:
+                summary['demand_validation'] = to_summary_section(demand_results)
+                logger.info("  Demand validation vs survey added to summary")
+        except Exception as e:
+            logger.warning(f"  Demand validation skipped: {e}")
+
         summary_path = self.experiment_dir / 'experiment_summary.json'
         write_summary(summary, summary_path)
 
@@ -1415,6 +1574,35 @@ class ExperimentRunner:
             json.dump(self.config, f, indent=2)
 
         logger.info(f"Experiment summary saved to: {summary_path}")
+
+        # Human-readable report for this run. Reads the summary just written,
+        # so it must come after write_summary().
+        self._generate_report()
+
+    def _generate_report(self):
+        """Write report.md / report.html summarising this experiment.
+
+        Never fatal: a run that simulated and evaluated fine should not be
+        reported as failed because a report could not be rendered. The PDF step
+        is skipped automatically where no browser is installed (e.g. the
+        server) — see scripts/experiment_report.py --html-to-pdf.
+        """
+        try:
+            sys.path.insert(0, str(Path(__file__).parent / 'scripts'))
+            from experiment_report import (build_markdown, load_run,
+                                           markdown_to_html)
+
+            run = load_run(self.experiment_dir)
+            md_text = build_markdown(run, baseline=None, embed_dir=self.experiment_dir)
+            (self.experiment_dir / 'report.md').write_text(md_text, encoding='utf-8')
+            html = markdown_to_html(md_text, self.experiment_dir.name,
+                                    base_dir=self.experiment_dir)
+            (self.experiment_dir / 'report.html').write_text(html, encoding='utf-8')
+            logger.info(f"Experiment report saved to: {self.experiment_dir / 'report.html'}")
+            logger.info("  For a PDF: python scripts/experiment_report.py "
+                        "--html-to-pdf <that file>  (needs a browser)")
+        except Exception as e:
+            logger.warning(f"Could not generate the experiment report: {e}")
 
     def run(self, skip_simulation: bool = False) -> Dict:
         """

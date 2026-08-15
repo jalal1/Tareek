@@ -3,6 +3,7 @@ import numpy as np
 from scipy.spatial.distance import cdist
 from typing import Dict, List, Optional
 from utils.logger import setup_logger
+from utils.od_diagnostics import cosine_corrected_km
 from data_sources.base_survey_trip import BaseSurveyTrip
 
 # Maps geo level constant → number of GEOID characters used as the zone key
@@ -11,7 +12,142 @@ _GEO_LEVEL_PREFIX_LEN: Dict[str, int] = {
     BaseSurveyTrip.GEO_BLOCK_GROUP: 12,
 }
 
+# How pair distances are measured in the gravity friction matrix.
+#   cosine_km       — kilometres with a latitude cosine correction, and an
+#                     area-based intrazonal distance on the diagonal.
+#   legacy_degrees  — the pre-stage-1 behaviour: raw degrees with a 0.1-degree
+#                     guard on exact zeros. Kept solely so the ablation's arm A
+#                     ("today's behaviour") remains runnable after the fix lands.
+DISTANCE_COSINE_KM = "cosine_km"
+DISTANCE_LEGACY_DEGREES = "legacy_degrees"
+
+# Which source produces the work OD matrix.
+#   lodes_od — observed LODES origin-destination flows (the published data)
+#   gravity  — the estimated gravity model + IPF (the fallback)
+#   auto     — prefer observed; fall back to gravity, loudly, when the region
+#              has no LODES coverage for the configured year (E8)
+SOURCE_AUTO = "auto"
+SOURCE_LODES_OD = "lodes_od"
+SOURCE_GRAVITY = "gravity"
+VALID_OD_SOURCES = (SOURCE_AUTO, SOURCE_LODES_OD, SOURCE_GRAVITY)
+
+# Distance-decay functional form.
+#   exponential — exp(-beta*d). Bounded at d=0, so near-diagonal cells cannot
+#                 dominate the seed. beta is in 1/km.
+#   gamma       — d^alpha * exp(-beta*d). Adds a rising limb, so very short
+#                 trips are suppressed rather than merely bounded.
+#   power       — d^(-beta). LEGACY: unbounded as d approaches zero, which is
+#                 the dominant defect (proposal §5). Kept for ablation arms.
+FRICTION_EXPONENTIAL = "exponential"
+FRICTION_GAMMA = "gamma"
+FRICTION_POWER = "power"
+VALID_FRICTION_FORMS = (FRICTION_EXPONENTIAL, FRICTION_GAMMA, FRICTION_POWER)
+
+
+def compute_friction(distances: np.ndarray, beta: float,
+                     form: str = FRICTION_POWER,
+                     gamma_alpha: float = 1.0) -> np.ndarray:
+    """Turn a distance matrix into distance-decay weights.
+
+    The functional form matters more than the parameter. An inverse power law
+    has no ceiling as distance approaches zero, so the shortest pairs dominate
+    the seed before IPF ever runs — and IPF cannot fix a seed's shape, only its
+    margins. Measured at 15-county Twin Cities, the closest pair sits 0.4 m
+    apart and carries 24.8 million times the median pair's friction.
+
+    Bounded forms remove that failure mode: exp(-beta*d) equals 1 at d=0 and
+    falls smoothly, so no pair can run away.
+
+    Args:
+        distances: pair distances. Kilometres for the bounded forms — they are
+            scale-sensitive, unlike a pure power law where the unit cancels in
+            IPF normalisation.
+        beta: decay parameter. Units depend on the form: 1/km for exponential
+            and gamma, dimensionless for power.
+        form: one of VALID_FRICTION_FORMS.
+        gamma_alpha: the rising-limb exponent, gamma form only.
+
+    Returns:
+        Friction weights, same shape as *distances*.
+    """
+    if form not in VALID_FRICTION_FORMS:
+        raise ValueError(
+            f"friction form must be one of {VALID_FRICTION_FORMS}, got {form!r}"
+        )
+    if beta <= 0:
+        raise ValueError(f"beta must be positive, got {beta}")
+
+    if form == FRICTION_EXPONENTIAL:
+        return np.exp(-beta * distances)
+
+    if form == FRICTION_GAMMA:
+        # d^alpha * exp(-beta*d). Bounded because the exponential term
+        # dominates; the power term is a rising limb, not a singularity.
+        return np.power(distances, gamma_alpha) * np.exp(-beta * distances)
+
+    # power (legacy): unbounded as distances approach zero.
+    return np.power(distances, -beta)
+
 logger = setup_logger(__name__)
+
+
+def _apply_intrazonal_distance(distances: np.ndarray,
+                               home_geoids: List[str],
+                               work_geoids: List[str],
+                               zone_sqrt_area: Optional[Dict[str, float]],
+                               intrazonal_factor: float) -> np.ndarray:
+    """Replace same-zone (diagonal) distances with an area-based value.
+
+    A zone's distance to itself is currently the gap between its home-table and
+    work-table centroids — two averages over different block sets — so it is an
+    artefact, not a travel distance. It is also tiny (median 159 m), which an
+    unbounded power law turns into an enormous friction weight, and that is what
+    drives the intrazonal over-concentration.
+
+    The replacement is ``factor * sqrt(zone area)``: the mean trip length inside
+    a zone scales with the zone's linear dimension.
+
+    Returns the same array, modified in place.
+    """
+    if not zone_sqrt_area:
+        logger.warning(
+            "  No zone area supplied — intrazonal distances keep their "
+            "(meaningless) centroid-gap values. Trips inside a zone will stay "
+            "over-weighted."
+        )
+        return distances
+
+    work_index = {z: j for j, z in enumerate(work_geoids)}
+
+    rows, cols, vals = [], [], []
+    missing = 0
+    for i, zone in enumerate(home_geoids):
+        j = work_index.get(zone)
+        if j is None:
+            continue  # zone is not a destination; no diagonal cell to fix
+        sqrt_area = zone_sqrt_area.get(zone)
+        if sqrt_area is None:
+            missing += 1
+            continue
+        rows.append(i)
+        cols.append(j)
+        vals.append(intrazonal_factor * sqrt_area)
+
+    if rows:
+        old = distances[rows, cols]
+        distances[rows, cols] = vals
+        logger.info(
+            f"  Intrazonal distance set from zone area on {len(rows):,} diagonal "
+            f"cells (factor {intrazonal_factor}): median {np.median(old) * 1000:.0f} m "
+            f"-> {np.median(vals) * 1000:.0f} m"
+        )
+    if missing:
+        logger.warning(f"  {missing:,} zone(s) had no area estimate; diagonal left as-is")
+
+    # A zero distance would make friction infinite under a power law; floor at
+    # 50 m, well below any real zone's characteristic size.
+    np.maximum(distances, 0.05, out=distances)
+    return distances
 
 def euclidean_distance_matrix(lat1, lon1, lat2, lon2):
     """Fast approximation for distances < 100km"""
@@ -297,28 +433,61 @@ def combine_od_matrices(survey_od_matrix: pd.DataFrame,
     
     return combined_rounded
 
-def create_gravity_model(work_locations_dict, home_locs_dict, beta, max_iterations=50, convergence_threshold=1e-4):
+def create_gravity_model(work_locations_dict, home_locs_dict, beta, max_iterations=50,
+                         convergence_threshold=1e-4, distance_mode=DISTANCE_COSINE_KM,
+                         intrazonal_factor=0.5, zone_sqrt_area=None,
+                         friction_form=FRICTION_POWER, gamma_alpha=1.0):
     """
     Create OD matrix using gravity model with IPF (Iterative Proportional Fitting).
-    
+
     Parameters:
     - work_locations_dict: Dictionary with work block IDs as keys, contains 'n_employees' and 'centroid'
     - home_locs_dict: Dictionary with home block IDs as keys, contains 'n_employees' and 'centroid'
     - beta: Distance decay parameter for friction factors
     - max_iterations: Maximum IPF iterations
     - convergence_threshold: Relative difference threshold for convergence
-    
+    - distance_mode: "cosine_km" (default) measures pair distances in kilometres
+      with a latitude cosine correction, and sets the diagonal from zone area.
+      "legacy_degrees" reproduces the pre-stage-1 behaviour exactly — raw
+      degrees with a 0.1-degree zero guard — so the ablation's arm A stays
+      runnable from the same working tree.
+    - intrazonal_factor: intrazonal distance = factor * sqrt(zone area).
+      Ignored in legacy mode.
+    - zone_sqrt_area: {zone_id: sqrt(area) in km}. Required for the intrazonal
+      fix; when omitted, diagonal cells keep their (meaningless) centroid
+      distance and a warning is logged.
+    - friction_form: "exponential" / "gamma" (bounded) or "power" (legacy,
+      unbounded — the dominant defect). Bounded forms need distances in km, so
+      they should be paired with distance_mode="cosine_km".
+    - gamma_alpha: rising-limb exponent for the gamma form.
+
     Returns:
     - od_matrix: 2D numpy array (rows=home blocks, cols=work blocks)
     - home_geoids: List of home block IDs (row order)
     - work_geoids: List of work block IDs (column order)
     """
-    
+
     # Input validation
     if beta <= 0:
         raise ValueError("Beta parameter must be positive")
     if not work_locations_dict or not home_locs_dict:
         raise ValueError("Empty input data")
+    if distance_mode not in (DISTANCE_COSINE_KM, DISTANCE_LEGACY_DEGREES):
+        raise ValueError(
+            f"distance_mode must be one of "
+            f"{(DISTANCE_COSINE_KM, DISTANCE_LEGACY_DEGREES)}, got {distance_mode!r}"
+        )
+    # A pure power law is scale-free — the unit cancels in IPF normalisation —
+    # but exp(-beta*d) is not: the same beta means a completely different decay
+    # in degrees than in km. Pairing a bounded form with legacy degrees would
+    # apply a ~111x mis-scaled beta and look plausible while being wrong.
+    if (friction_form in (FRICTION_EXPONENTIAL, FRICTION_GAMMA)
+            and distance_mode == DISTANCE_LEGACY_DEGREES):
+        raise ValueError(
+            f"friction form {friction_form!r} is scale-sensitive and requires "
+            f"distances in kilometres, but distance_mode is 'legacy_degrees'. "
+            f"Use distance='cosine_km', or friction='power' for the legacy arm."
+        )
     
     # Get sorted geoid lists
     home_geoids = sorted(home_locs_dict.keys())
@@ -352,13 +521,38 @@ def create_gravity_model(work_locations_dict, home_locs_dict, beta, max_iteratio
                             for geoid in work_geoids], dtype=np.float64)
     
     # Calculate distance matrix
-    logger.info("Calculating distances...")
-    distances = cdist(home_coords, work_coords, metric='euclidean')
-    distances = np.where(distances == 0, 0.1, distances)  # Avoid zero distances
-    
-    # Calculate friction factors: f_ij = distance^(-beta)
-    logger.info("Calculating friction factors...")
-    friction_factors = np.power(distances, -beta)
+    logger.info(f"Calculating distances (mode: {distance_mode})...")
+    if distance_mode == DISTANCE_LEGACY_DEGREES:
+        # Pre-stage-1 behaviour, kept verbatim so arm A of the ablation stays
+        # reproducible. Distances are raw (lon, lat) degrees — not km — and the
+        # guard only replaces *exact* zeros, turning them into 0.1 degrees
+        # (~11 km), which makes those zones the least attractive place to work
+        # in themselves. Both defects are why this mode is legacy.
+        distances = cdist(home_coords, work_coords, metric='euclidean')
+        n_exact_zeros = int((distances == 0).sum())
+        distances = np.where(distances == 0, 0.1, distances)
+        if n_exact_zeros:
+            logger.warning(
+                f"  legacy_degrees: {n_exact_zeros} exact-zero pair(s) forced to "
+                f"0.1 degrees (~11.1 km)"
+            )
+    else:
+        distances = cosine_corrected_km(home_coords, work_coords)
+        distances = _apply_intrazonal_distance(
+            distances, home_geoids, work_geoids,
+            zone_sqrt_area=zone_sqrt_area,
+            intrazonal_factor=intrazonal_factor,
+        )
+        logger.info(f"  Distances in km: median {np.median(distances):.2f}, "
+                    f"min {distances.min():.3f}, max {distances.max():.1f}")
+
+    # Calculate friction factors from the configured functional form.
+    logger.info(f"Calculating friction factors (form: {friction_form}, beta={beta})...")
+    friction_factors = compute_friction(distances, beta, form=friction_form,
+                                        gamma_alpha=gamma_alpha)
+    logger.info(f"  Friction range: {friction_factors.min():.3e} to "
+                f"{friction_factors.max():.3e} "
+                f"(max/median {friction_factors.max() / np.median(friction_factors):,.0f}x)")
     
     # Initialize OD matrix with gravity model
     od_matrix = friction_factors.copy()
@@ -422,18 +616,24 @@ def create_gravity_model(work_locations_dict, home_locs_dict, beta, max_iteratio
     return od_matrix, home_geoids, work_geoids
 
 
-def create_local_od_matrix(work_locs_dict, home_locs_dict, beta=1.5, max_iterations=200, 
-                          convergence_threshold=0.03):
+def create_local_od_matrix(work_locs_dict, home_locs_dict, beta=1.5, max_iterations=200,
+                          convergence_threshold=0.03, distance_mode=DISTANCE_COSINE_KM,
+                          intrazonal_factor=0.5, zone_sqrt_area=None,
+                          friction_form=FRICTION_POWER, gamma_alpha=1.0):
     """
     Create origin-destination matrix using gravity model with IPF.
-    
+
     Parameters:
     - work_locs_dict: Dictionary with workplace locations and n_employees
     - home_locs_dict: Dictionary with home locations, n_employees, and centroid
     - beta: Distance decay parameter (default 1.5 for metropolitan commuting)
     - max_iterations: Maximum iterations for IPF algorithm
     - convergence_threshold: Convergence criterion for IPF
-    
+    - distance_mode: "cosine_km" (default) or "legacy_degrees" — see
+      create_gravity_model
+    - intrazonal_factor: intrazonal distance = factor * sqrt(zone area)
+    - zone_sqrt_area: {zone_id: sqrt(area) in km} for the intrazonal fix
+
     Returns:
     - result dict with:
         - 'od_matrix': 2D numpy array (rows=home blocks, cols=work blocks)
@@ -446,11 +646,16 @@ def create_local_od_matrix(work_locs_dict, home_locs_dict, beta=1.5, max_iterati
     
     # Call the gravity model function
     od_matrix, home_geoids, work_geoids = create_gravity_model(
-        work_locs_dict, 
-        home_locs_dict, 
-        beta=beta, 
-        max_iterations=max_iterations, 
-        convergence_threshold=convergence_threshold
+        work_locs_dict,
+        home_locs_dict,
+        beta=beta,
+        max_iterations=max_iterations,
+        convergence_threshold=convergence_threshold,
+        distance_mode=distance_mode,
+        intrazonal_factor=intrazonal_factor,
+        zone_sqrt_area=zone_sqrt_area,
+        friction_form=friction_form,
+        gamma_alpha=gamma_alpha,
     )
     
     # Calculate totals

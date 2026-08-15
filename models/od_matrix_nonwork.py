@@ -14,7 +14,13 @@ import numpy as np
 from typing import Dict, Any, List, Tuple
 from utils.logger import setup_logger
 from data_sources.base_survey_trip import BaseSurveyTrip
-from models.od_matrix_v3 import combine_od_matrices
+from models.od_matrix_v3 import (
+    combine_od_matrices,
+    _apply_intrazonal_distance,
+    DISTANCE_COSINE_KM,
+    DISTANCE_LEGACY_DEGREES,
+)
+from utils.od_diagnostics import cosine_corrected_km, zone_sqrt_area_km
 from utils.poi_weighting import POIWeighting
 
 logger = setup_logger(__name__)
@@ -86,9 +92,9 @@ def _aggregate_to_geo_level(
         if count > 0:
             bg_poi_dict[geoid[:prefix_len]] += count
 
-    logger.info(f"  Pre-aggregated {len(home_locs_dict):,} blocks → "
+    logger.info(f"  Pre-aggregated {len(home_locs_dict):,} blocks -> "
                 f"{len(bg_home_dict):,} {geo_level}s (home)")
-    logger.info(f"  Pre-aggregated POI blocks → "
+    logger.info(f"  Pre-aggregated POI blocks -> "
                 f"{len(bg_poi_dict):,} {geo_level}s with POIs")
 
     return bg_home_dict, dict(bg_poi_dict)
@@ -481,7 +487,10 @@ def create_gravity_od_matrix_nonwork(home_locs_dict: Dict[str, Dict[str, Any]],
                                       beta: float = 2.0,
                                       max_iterations: int = 50,
                                       convergence_threshold: float = 1e-4,
-                                      geo_level: str = BaseSurveyTrip.GEO_BLOCK_GROUP) -> Tuple[pd.DataFrame, List[str], List[str]]:
+                                      geo_level: str = BaseSurveyTrip.GEO_BLOCK_GROUP,
+                                      distance_mode: str = DISTANCE_COSINE_KM,
+                                      intrazonal_factor: float = 0.5,
+                                      zone_sqrt_area: Dict[str, float] = None) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
     Create singly-constrained gravity model OD matrix for non-work trips.
 
@@ -500,6 +509,11 @@ def create_gravity_od_matrix_nonwork(home_locs_dict: Dict[str, Dict[str, Any]],
         beta: Distance decay parameter
         max_iterations: Max IPF iterations
         convergence_threshold: IPF convergence threshold
+        distance_mode: "cosine_km" (default) or "legacy_degrees" — the same
+            switch the work path uses, so an ablation arm can hold both paths
+            at the old geometry.
+        intrazonal_factor: intrazonal distance = factor * sqrt(zone area)
+        zone_sqrt_area: {zone_id: sqrt(area) in km} for the intrazonal fix
 
     Returns:
         Tuple of (od_matrix DataFrame, home_geoids list, dest_geoids list)
@@ -573,10 +587,28 @@ def create_gravity_od_matrix_nonwork(home_locs_dict: Dict[str, Dict[str, Any]],
                             for gid in dest_geoids], dtype=np.float64)
 
     # Calculate distance matrix → friction factors in-place (single array)
-    logger.info("Calculating distances and friction factors...")
-    friction = cdist(home_coords, dest_coords, metric='euclidean')
-    friction *= 111.32  # degrees → km
-    np.maximum(friction, 0.1, out=friction)  # avoid zero distances
+    #
+    # Shares both distance defects with the work path (proposal D7), fixed here
+    # in the same pass so non-work is not left quietly distorted:
+    #   1. the old conversion multiplied degrees by 111.32 with no cosine term,
+    #      overstating east-west separation by 1/cos(lat) (~1.41x at 45N);
+    #   2. the diagonal used the centroid gap, which for a zone against itself
+    #      is an artefact rather than a travel distance.
+    logger.info(f"Calculating distances and friction factors (mode: {distance_mode})...")
+    if distance_mode == DISTANCE_LEGACY_DEGREES:
+        friction = cdist(home_coords, dest_coords, metric='euclidean')
+        friction *= 111.32  # degrees → km, no cosine correction (legacy)
+        np.maximum(friction, 0.1, out=friction)
+    else:
+        friction = cosine_corrected_km(home_coords, dest_coords)
+        friction = _apply_intrazonal_distance(
+            friction, home_geoids, dest_geoids,
+            zone_sqrt_area=zone_sqrt_area,
+            intrazonal_factor=intrazonal_factor,
+        )
+        logger.info(f"  Distances in km: median {np.median(friction):.2f}, "
+                    f"min {friction.min():.3f}, max {friction.max():.1f}")
+
     np.power(friction, -beta, out=friction)   # distance^(-beta)
 
     # Initialize OD matrix: Tij = Oi * (Aj * f_ij) / sum_j(Aj * f_ij)
@@ -666,9 +698,27 @@ def create_nonwork_od_matrix(config: Dict[str, Any],
     beta = purpose_config.get('od_matrix', {}).get('beta', 2.0)
     alpha = purpose_config.get('od_matrix', {}).get('alpha', 0.1)
 
+    # Distance handling is shared with the work path — same defects, same fix,
+    # one switch (D7). Read from the top-level od_matrix section so an ablation
+    # arm cannot accidentally hold the two paths at different geometries.
+    od_config = config.get('od_matrix', {})
+    distance_mode = od_config.get('distance', DISTANCE_COSINE_KM)
+    intrazonal_factor = od_config.get('intrazonal_factor', 0.5)
+
     logger.info(f"Configuration:")
     logger.info(f"  Beta (distance decay): {beta}")
     logger.info(f"  Alpha (survey weight): {alpha}")
+    logger.info(f"  Distance mode: {distance_mode}")
+
+    # Zone extents for the intrazonal distance, derived from the block points
+    # already loaded (Census area is only stored per county).
+    prefix_len = _GEO_LEVEL_PREFIX_LEN.get(geo_level, 12)
+    _by_zone: Dict[str, List[Tuple[float, float]]] = {}
+    for _bid, _d in home_locs_dict.items():
+        _lat, _lon = _d.get('lat'), _d.get('lon')
+        if _lat is not None and _lon is not None:
+            _by_zone.setdefault(_bid[:prefix_len], []).append((_lon, _lat))
+    zone_sqrt_area = zone_sqrt_area_km(_by_zone)
 
     # Step 1: Calculate POI density per block (uses pre-computed mapping if available)
     poi_density_dict = calculate_poi_density_per_block(
@@ -687,6 +737,9 @@ def create_nonwork_od_matrix(config: Dict[str, Any],
         survey_df,
         beta=beta,
         geo_level=geo_level,
+        distance_mode=distance_mode,
+        intrazonal_factor=intrazonal_factor,
+        zone_sqrt_area=zone_sqrt_area,
     )
 
     if gravity_od_matrix.empty:

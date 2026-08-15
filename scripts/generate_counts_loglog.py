@@ -18,7 +18,8 @@ Station aggregation:
   ``_station_base`` convention: strip a trailing ``_<digits>`` suffix, and split
   a combined ``A+B`` id on ``+`` first).
 
-Edit the EXPERIMENTS dict below to choose which runs to plot.
+Experiments are passed on the command line, so the pipeline can call this per
+run without the file being edited first.
 
 Comparing across experiments:
   In overlay mode, pass ``--connect`` to join the same station's points across
@@ -29,10 +30,16 @@ Comparing across experiments:
   ``--sum-directions`` collapses directions).
 
 Usage:
-    python scripts/generate_counts_loglog.py
-    python scripts/generate_counts_loglog.py --mode overlay --hours 7 8 16 17
-    python scripts/generate_counts_loglog.py --mode overlay --connect
-    python scripts/generate_counts_loglog.py --mode separate --sum-directions
+    # one run — figures land in that run's evaluation/ folder
+    python scripts/generate_counts_loglog.py experiments/experiment_20260812_233102
+
+    # several runs overlaid, with labels for the legend
+    python scripts/generate_counts_loglog.py \\
+        "drop=experiments/exp_A" "anchor=experiments/exp_B" --connect
+
+    python scripts/generate_counts_loglog.py <exp> --mode separate --sum-directions
+    python scripts/generate_counts_loglog.py <exp_a> <exp_b> --hours 7 8 16 17
+    python scripts/generate_counts_loglog.py <exp> --out-dir some/other/place
 """
 
 import argparse
@@ -44,22 +51,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-# Root holding the experiment folders. Values in EXPERIMENTS are resolved
-# relative to this (or may be absolute paths).
-EXPERIMENTS_DIR = Path("e:/projects/Tareek/experiments")
-
-# Where figures are written.
-FIGURES_DIR = Path(__file__).resolve().parent.parent / "experiments" / "_figures"
-
-# label shown on the plot/legend  ->  experiment folder (relative to
-# EXPERIMENTS_DIR, or an absolute path). Edit freely.
-EXPERIMENTS = {
-    "Run A": "experiment_20260622_175702",
-    "Run B": "experiment_20260623_053227_100iter_0.15sf",
-}
-
-# MATSim hour indices to plot (countscompare Hour column is 1..24).
+# Clock hours to plot, 0..23 — the same convention the evaluator and the rest
+# of the report use ("hour 7" is 07:00-08:00, matching count_error_h07.png).
+#
+# countscompare.txt numbers its Hour column 1..24 for the SAME bins, so clock
+# hour h is row Hour == h + 1. Everything below works in clock hours and
+# converts only at the point of reading the file; getting this wrong silently
+# shifts every figure by one hour against the maps it sits beside.
 DEFAULT_HOURS = [7, 8, 16, 17]
+
+
+def clock_to_countscompare(hour: int) -> int:
+    """Clock hour (0..23) -> the Hour value used in countscompare.txt (1..24)."""
+    return hour + 1
 
 # Distinct colours/markers for overlaying experiments.
 _PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf",
@@ -123,7 +127,7 @@ def load_hour(counts_file: Path, hour: int, sum_directions: bool) -> pd.DataFram
         print(f"  SKIP {counts_file}: missing columns {sorted(missing)}")
         return None
 
-    hour_df = df[df["Hour"] == hour]
+    hour_df = df[df["Hour"] == clock_to_countscompare(hour)]
     if hour_df.empty:
         return None
 
@@ -239,8 +243,14 @@ def _finalize_axes(ax, all_obs: np.ndarray, all_sim: np.ndarray, title: str):
     min/max of all observed+simulated volumes (with a small margin) so points
     are always visible, whatever the volume scale of the run.
     """
-    vals = np.concatenate([all_obs, all_sim, [1.0]])
+    # Only positive values are plottable on a log axis. The 1.0 fallback is a
+    # guard for the degenerate all-zero case, NOT a data point — including it
+    # unconditionally would pin the axis floor at 1 even when the smallest real
+    # volume is far above it, wasting most of the frame on empty decades.
+    vals = np.concatenate([all_obs, all_sim])
     vals = vals[vals > 0]
+    if len(vals) == 0:
+        vals = np.array([1.0])
     data_lo = vals.min()
     data_hi = vals.max()
     # Reference lines span a little beyond the data on both ends.
@@ -274,7 +284,7 @@ def _new_fig():
 
 
 def generate_overlay(loaded: dict[str, Path], hours: list[int], sum_directions: bool,
-                     connect: bool = False):
+                     out_dir: Path, connect: bool = False, fmt: str = "pdf"):
     """One figure per hour; every experiment overlaid on shared axes.
 
     When *connect* is set, the same station's points are joined across
@@ -315,17 +325,24 @@ def generate_overlay(loaded: dict[str, Path], hours: list[int], sum_directions: 
         agg = "summed" if sum_directions else "per-dir"
         _finalize_axes(ax, np.concatenate(all_obs), np.concatenate(all_sim),
                        f"Counts comparison — hour {hour:02d}:00 ({agg})")
-        FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-        suffix = "summed" if sum_directions else "perdir"
-        if connect:
-            suffix += "_connected"
-        out_path = FIGURES_DIR / f"counts_overlay_h{hour:02d}_{suffix}.pdf"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # A single experiment gets the stable name the report looks for; only a
+        # multi-experiment overlay needs the aggregation/connect suffixes to
+        # tell its variants apart.
+        if len(loaded) == 1:
+            out_path = out_dir / f"counts_loglog_h{hour:02d}.{fmt}"
+        else:
+            suffix = "summed" if sum_directions else "perdir"
+            if connect:
+                suffix += "_connected"
+            out_path = out_dir / f"counts_overlay_h{hour:02d}_{suffix}.{fmt}"
         fig.savefig(out_path, bbox_inches="tight", dpi=150)
         plt.close(fig)
         print(f"  Figure: {out_path}")
 
 
-def generate_separate(loaded: dict[str, Path], hours: list[int], sum_directions: bool):
+def generate_separate(loaded: dict[str, Path], hours: list[int], sum_directions: bool,
+                      out_dir: Path, fmt: str = "pdf"):
     """One figure per (experiment, hour)."""
     for label, counts_file in loaded.items():
         safe = label.replace(", ", "_").replace(" ", "_")
@@ -340,24 +357,41 @@ def generate_separate(loaded: dict[str, Path], hours: list[int], sum_directions:
             agg = "summed" if sum_directions else "per-dir"
             _finalize_axes(ax, plot_df["obs"].values, plot_df["sim"].values,
                            f"{label} — hour {hour:02d}:00 ({agg})")
-            FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+            out_dir.mkdir(parents=True, exist_ok=True)
             suffix = "summed" if sum_directions else "perdir"
-            out_path = FIGURES_DIR / f"counts_h{hour:02d}_{safe}_{suffix}.pdf"
+            out_path = out_dir / f"counts_h{hour:02d}_{safe}_{suffix}.{fmt}"
             fig.savefig(out_path, bbox_inches="tight", dpi=150)
             plt.close(fig)
             print(f"  Figure: {out_path}")
 
 
-def resolve_experiments() -> dict[str, Path]:
-    """Resolve EXPERIMENTS to {label: countscompare_path}, skipping missing ones."""
+def parse_experiment_arg(arg: str) -> tuple[str, Path]:
+    """Split a ``LABEL=path`` argument into its parts.
+
+    A bare path is allowed; the folder name then doubles as the label. Only the
+    first ``=`` splits, so a path containing one still works — and a Windows
+    drive letter ('E:/...') is never mistaken for a label, because the split is
+    on '=' rather than ':'.
+    """
+    if "=" in arg:
+        label, _, raw = arg.partition("=")
+        label = label.strip()
+        if label and raw.strip():
+            return label, Path(raw.strip())
+    path = Path(arg)
+    return path.name or str(path), path
+
+
+def resolve_experiments(specs: list[str]) -> dict[str, Path]:
+    """Resolve CLI arguments to {label: countscompare_path}, skipping missing ones.
+
+    Paths are used as given (relative ones resolve against the working
+    directory), so the same command works on the server and on Windows without
+    a checkout-specific root baked into the file.
+    """
     loaded: dict[str, Path] = {}
-    for label, folder_name in EXPERIMENTS.items():
-        if not folder_name:
-            print(f"  SKIP {label}: no folder configured")
-            continue
-        folder = Path(folder_name)
-        if not folder.is_absolute():
-            folder = EXPERIMENTS_DIR / folder_name
+    for spec in specs:
+        label, folder = parse_experiment_arg(spec)
         if not folder.exists():
             print(f"  ERROR {label}: folder not found: {folder}")
             continue
@@ -365,14 +399,52 @@ def resolve_experiments() -> dict[str, Path]:
         if counts_file is None:
             print(f"  SKIP {label}: no countscompare.txt under {folder}")
             continue
+        if label in loaded:
+            # Two runs sharing a folder name would otherwise silently collapse
+            # into one series.
+            label = f"{label} ({len(loaded)})"
         loaded[label] = counts_file
         print(f"  {label}: {counts_file}")
     return loaded
 
 
+def default_output_dir(specs: list[str]) -> Path:
+    """Where figures go when --out-dir is not given.
+
+    A single run writes into its own ``evaluation/`` folder, next to the other
+    per-run figures, which is what lets the pipeline call this per run and have
+    the report pick the output up. Comparing several runs has no single home,
+    so those land in ``experiments/_figures`` beside the runs themselves.
+    """
+    if len(specs) == 1:
+        _, folder = parse_experiment_arg(specs[0])
+        return folder / "evaluation"
+    _, first = parse_experiment_arg(specs[0])
+    parent = first.resolve().parent
+    return parent / "_figures"
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Log-log observed-vs-simulated count comparison across experiments."
+        description="Log-log observed-vs-simulated count comparison across experiments.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Each EXPERIMENT is a run folder, optionally prefixed with a "
+               "legend label: 'anchor=experiments/exp_B'. Without a label the "
+               "folder name is used.",
+    )
+    parser.add_argument(
+        "experiments", nargs="+", metavar="EXPERIMENT",
+        help="Experiment folder(s), each optionally 'LABEL=path'.",
+    )
+    parser.add_argument(
+        "--format", choices=["pdf", "png"], default="pdf",
+        help="Figure format. PDF for papers (default); PNG for the run report, "
+             "which embeds images and cannot show a PDF.",
+    )
+    parser.add_argument(
+        "--out-dir", type=Path, default=None,
+        help="Where to write figures. Default: the run's own evaluation/ "
+             "folder for a single experiment, else experiments/_figures.",
     )
     parser.add_argument(
         "--mode", choices=["overlay", "separate"], default="overlay",
@@ -400,19 +472,22 @@ def main():
         print("  NOTE: --connect only applies to --mode overlay; ignoring it.")
         args.connect = False
 
-    print(f"Experiments root: {EXPERIMENTS_DIR}")
-    loaded = resolve_experiments()
+    loaded = resolve_experiments(args.experiments)
     if not loaded:
         print("No experiments with countscompare data found. Exiting.")
-        return
+        raise SystemExit(1)
 
+    out_dir = args.out_dir or default_output_dir(args.experiments)
     agg = "summed per station" if args.sum_directions else "per direction"
-    print(f"\nMode: {args.mode} | hours: {args.hours} | stations: {agg}\n")
+    print(f"\nMode: {args.mode} | hours: {args.hours} | stations: {agg}")
+    print(f"Output: {out_dir}\n")
 
     if args.mode == "overlay":
-        generate_overlay(loaded, args.hours, args.sum_directions, connect=args.connect)
+        generate_overlay(loaded, args.hours, args.sum_directions, out_dir,
+                         connect=args.connect, fmt=args.format)
     else:
-        generate_separate(loaded, args.hours, args.sum_directions)
+        generate_separate(loaded, args.hours, args.sum_directions, out_dir,
+                          fmt=args.format)
 
     print("\nDone.")
 

@@ -874,20 +874,81 @@ def build_summary(
 def _build_evaluation_section(evaluation_metrics: Dict) -> Dict:
     return {
         '_comment': 'Comparison of simulated traffic volumes vs ground truth traffic counts. '
-                   'Metrics calculated from hourly volume comparisons at matched device locations.',
+                   'Fields are ordered by how much they should influence a calibration '
+                   'decision: overall level first, then how the error splits across '
+                   'stations, then across the day, then the GEH pass rates, and only '
+                   'then the remaining station-hour metrics.',
+
+        # ── 1. Overall level: is there too much or too little traffic? ────
+        'aggregate_sim_obs_ratio': evaluation_metrics.get('aggregate_sim_obs_ratio', 0),
+        'aggregate_sim_obs_ratio_comment': 'Total simulated / total observed across every station-hour. '
+                                           'The single headline number: >1 means the model puts MORE traffic on '
+                                           'the network than the sensors saw, <1 means less. Read it together '
+                                           'with stations_over_simulated below — a ratio near 1.0 can also be '
+                                           'over- and under-simulating stations cancelling each other out.',
+        'total_observed_volume': evaluation_metrics.get('total_observed_volume', 0),
+        'total_simulated_volume': evaluation_metrics.get('total_simulated_volume', 0),
+        'interquartile_mean_ratio': evaluation_metrics.get('interquartile_mean_ratio', 0),
+        'interquartile_mean_ratio_comment': 'Interquartile mean of per-station sim/obs total-volume ratios. '
+                                            'Drops bottom & top 25% of stations and averages the middle 50%. '
+                                            'Robust to boundary stations; 1.0 = perfect, <0.7 = under-simulation. '
+                                            'Used as the primary signal for demand_estimator scaling-factor decisions.',
+
+        # ── 2. How the error splits across stations ───────────────────────
+        'stations_over_simulated': evaluation_metrics.get('stations_over_simulated', 0),
+        'stations_within_10pct': evaluation_metrics.get('stations_within_10pct', 0),
+        'stations_under_simulated': evaluation_metrics.get('stations_under_simulated', 0),
+        'stations_split_comment': 'Count of stations whose daily total is >1.1x observed (over), within '
+                                  '0.9-1.1x (ok), and <0.9x (under). This is what tells "the whole model is '
+                                  'too high" apart from "a few corridors are wrong". Adding demand when most '
+                                  'stations already over-simulate makes the fit worse, not better.',
+        'station_ratio_cv': evaluation_metrics.get('station_ratio_cv', 0),
+        'station_ratio_cv_comment': 'Coefficient of variation (std/mean) of the per-station sim/obs ratios — '
+                                    'the concentrated-vs-uniform test. Below ~0.35 every station is off by a '
+                                    'similar factor, so a single global lever (scaling_factor) can correct the '
+                                    'region. Above it the error sits on particular corridors and a global '
+                                    'multiplier would drag the already-correct stations off target. '
+                                    'demand_estimator refuses to change scaling_factor when this is high or absent.',
+
+        # ── 3. How the error splits across the day ────────────────────────
+        'ratio_night': evaluation_metrics.get('ratio_night', 0),
+        'ratio_morning': evaluation_metrics.get('ratio_morning', 0),
+        'ratio_midday': evaluation_metrics.get('ratio_midday', 0),
+        'ratio_evening': evaluation_metrics.get('ratio_evening', 0),
+        'time_block_comment': 'Sim/obs ratio within each block: night 0-3, morning 4-9, midday 10-17, '
+                              'evening 18-23. A model can match the daily total while being badly wrong '
+                              'hour by hour. If midday is near 1.0 while the peaks are high and night is '
+                              'near zero, the problem is WHEN trips depart, not how many there are — '
+                              'a departure-time question, not a scaling_factor one.',
+        'hourly_ratio_spread': evaluation_metrics.get('hourly_ratio_spread', 0),
+        'hourly_ratio_spread_comment': 'Max minus min of the 24 hourly sim/obs ratios. Near 0 means the daily '
+                                       'profile has the right shape and only its level is off; large means the '
+                                       'shape itself is wrong.',
+        'worst_hour': evaluation_metrics.get('worst_hour', 0),
+        'worst_hour_ratio': evaluation_metrics.get('worst_hour_ratio', 0),
+
+        # ── 4. Per-station GEH — pass rates, never an average ─────────────
+        'station_daily_geh_lt5_pct': evaluation_metrics.get('station_daily_geh_lt5_pct', 0),
+        'station_daily_geh_comment': 'Percent of stations whose 24-hour TOTAL scores GEH < 5. Each station is '
+                                     'tested against the threshold on its own, so this is a count of passing '
+                                     'stations rather than an average. No mean or median GEH is reported at any '
+                                     'level: GEH grows with volume, so averaging it across stations of different '
+                                     'size measures station size as much as model error, and the result is not '
+                                     'the GEH of any real count. Individual per-station GEH values are in the '
+                                     'device reports and spatial_overview.png.',
+
+        # ── 5. Station-hour metrics — volume-sensitive, read with care ────
         'num_devices': evaluation_metrics.get('num_devices'),
         'num_devices_comment': 'Number of ground truth traffic count devices successfully matched to network links',
         'num_comparisons': evaluation_metrics.get('num_comparisons'),
         'num_comparisons_comment': 'Total hourly comparison points (num_devices * hours with valid data)',
         'geh_lt_5_pct': round(evaluation_metrics.get('geh_lt_5_pct', 0), 2),
-        'geh_lt_5_pct_comment': 'Percentage of comparisons with GEH < 5 (industry standard for "good" match). '
-                               'Target: >85% for calibrated models. GEH formula: sqrt(2*(sim-obs)^2/(sim+obs))',
+        'geh_lt_5_pct_comment': 'Percentage of hourly link counts with GEH < 5 — the industry-standard form of '
+                               'the convention, which is defined for one count over one period. Target >=85%.',
         'correlation': round(evaluation_metrics.get('correlation', 0), 3),
-        'correlation_comment': 'Pearson correlation coefficient between simulated and observed volumes. '
-                              'Range: -1 to 1. Values > 0.7 indicate strong positive correlation.',
-        'mean_geh': round(evaluation_metrics.get('mean_geh', 0), 2),
-        'mean_geh_comment': 'Average GEH across all comparisons. Lower is better. '
-                           'GEH < 5 is considered acceptable for individual comparisons.',
+        'correlation_comment': 'Pearson correlation coefficient between simulated and observed volumes, on '
+                              'station-hours. Aggregating to daily totals typically reads 0.04-0.05 higher, '
+                              'so state which one is being quoted.',
         'mae': round(evaluation_metrics.get('mae', 0), 2),
         'mae_comment': 'Mean Absolute Error in vehicles/hour. Average |simulated - observed| across all comparisons.',
         'rmse': round(evaluation_metrics.get('rmse', 0), 2),
@@ -898,11 +959,6 @@ def _build_evaluation_section(evaluation_metrics: Dict) -> Dict:
                                  'Negative = underestimating traffic, Positive = overestimating traffic. '
                                  'Sensitive to boundary stations with through-traffic from outside the modeled '
                                  'area; prefer interquartile_mean_ratio for calibration decisions.',
-        'interquartile_mean_ratio': evaluation_metrics.get('interquartile_mean_ratio', 0),
-        'interquartile_mean_ratio_comment': 'Interquartile mean of per-station sim/obs total-volume ratios. '
-                                            'Drops bottom & top 25% of stations and averages the middle 50%. '
-                                            'Robust to boundary stations; 1.0 = perfect, <0.7 = under-simulation. '
-                                            'Used as the primary signal for demand_estimator scaling-factor decisions.',
         'median_station_ratio': evaluation_metrics.get('median_station_ratio', 0),
         'median_station_ratio_comment': 'Median of per-station sim/obs ratios. Companion to interquartile_mean_ratio.',
         'pct_stations_below_10pct': evaluation_metrics.get('pct_stations_below_10pct', 0),
@@ -910,7 +966,52 @@ def _build_evaluation_section(evaluation_metrics: Dict) -> Dict:
                                             'High values indicate boundary stations capturing through-traffic from '
                                             'outside the modeled region (cannot be fixed by raising demand).',
         'num_stations_below_10pct': evaluation_metrics.get('num_stations_below_10pct', 0),
+        'station_ratio_p10': evaluation_metrics.get('station_ratio_p10', 0),
+        'station_ratio_p90': evaluation_metrics.get('station_ratio_p90', 0),
+        'station_ratio_p10_p90_comment': '10th and 90th percentile of per-station sim/obs ratios — the raw spread '
+                                         'behind station_ratio_cv.',
+        'num_stations_with_ratio': evaluation_metrics.get('num_stations_with_ratio', 0),
+        'peak_hour_correlation': round(evaluation_metrics.get('peak_hour_correlation', 0), 3),
+        'peak_hour_correlation_comment': 'Correlation restricted to peak hours (6-9, 15-18).',
+        'geh_valid_count': evaluation_metrics.get('geh_valid_count', 0),
+        'zero_observed_count': evaluation_metrics.get('zero_observed_count', 0),
+        'num_directional_counts': evaluation_metrics.get('num_directional_counts', 0),
+        'num_directional_counts_comment': 'Count locations INCLUDING direction (one physical sensor reports each '
+                                          'travel direction separately), so this is typically 2x num_devices.',
+        # Carry through anything the evaluator produced that is not named above,
+        # so a new metric cannot silently fail to reach this file the way
+        # station_ratio_cv did. Comment keys are skipped.
+        **{k: v for k, v in evaluation_metrics.items()
+           if k not in _EVALUATION_EXPLICIT_KEYS
+           and k not in _EVALUATION_DROPPED_KEYS
+           and not k.endswith('_comment')},
     }
+
+
+# Fields _build_evaluation_section names explicitly (with their own comments).
+# Everything else the evaluator emits is carried through verbatim.
+_EVALUATION_EXPLICIT_KEYS = frozenset({
+    'num_devices', 'num_comparisons', 'geh_lt_5_pct', 'correlation',
+    'mae', 'rmse', 'mean_pct_error', 'interquartile_mean_ratio',
+    'median_station_ratio', 'pct_stations_below_10pct', 'num_stations_below_10pct',
+    'station_ratio_cv', 'station_ratio_p10', 'station_ratio_p90',
+    'num_stations_with_ratio', 'peak_hour_correlation', 'geh_valid_count',
+    'zero_observed_count', 'num_directional_counts',
+    'aggregate_sim_obs_ratio', 'total_observed_volume', 'total_simulated_volume',
+    'stations_over_simulated', 'stations_within_10pct', 'stations_under_simulated',
+    'ratio_night', 'ratio_morning', 'ratio_midday', 'ratio_evening',
+    'hourly_ratio_spread', 'worst_hour', 'worst_hour_ratio',
+    'station_daily_geh_lt5_pct',
+})
+
+# Averaged GEH fields, retired. A GEH is defined for one count over one period
+# and grows with volume, so any average across stations of different sizes
+# measures station size as much as model error. These are dropped on the way
+# into the summary so that a stale evaluator — or a re-summarised older run —
+# cannot reintroduce them through the catch-all carry-through above.
+_EVALUATION_DROPPED_KEYS = frozenset({
+    'mean_geh', 'station_daily_geh_mean', 'station_daily_geh_median',
+})
 
 
 def write_summary(summary: Dict, summary_path: Path) -> None:

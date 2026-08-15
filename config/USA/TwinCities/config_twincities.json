@@ -1,11 +1,27 @@
 {
   "region": {
     "counties": [
-      "27003"
+      "27003",
+      "27019",
+      "27025",
+      "27037",
+      "27053",
+      "27059",
+      "27079",
+      "27095",
+      "27123",
+      "27139",
+      "27141",
+      "27163",
+      "27171",
+      "55093",
+      "55109"
     ]
   },
   "data": {
-    "data_dir": "../data",
+    "data_dir": "/home/exouser/Documents/Tareek/data",
+    "census_api_key": "YOUR_CENSUS_API_KEY_HERE",
+    "_census_api_key_help": "Free API key from https://api.census.gov/data/key_signup.html. Used by demand_estimator.py to fetch ACS commute data (B08301, B08303) for calibration",
     "lodes": {
       "year": 2023,
       "job_type": "JT00",
@@ -15,7 +31,7 @@
       {
         "type": "tbi",
         "year": "2023",
-        "file": "",
+        "file": "csv_society_tbi_home_interview2023/TravelBehaviorInventory2023Trip.csv",
         "weight": 0
       },
       {
@@ -24,8 +40,7 @@
         "file": "nhts/csv/tripv2pub.csv",
         "weight": 1
       }
-    ],
-    "census_api_key": "YOUR_CENSUS_API_KEY_HERE"
+    ]
   },
   "gtfs": {
     "_comment": "GTFS transit feed discovery and caching. Feeds are auto-discovered from the Mobility Database catalog by intersecting feed bounding boxes with the configured region counties",
@@ -72,12 +87,14 @@
           11
         ],
         "_route_types_help": "GTFS route_type codes: 3=Bus, 11=Trolleybus. See GTFS spec for full list",
-        "access_buffer_meters": 800,
-        "_access_buffer_meters_help": "Maximum walking distance (meters) from origin/destination to nearest transit stop for this mode to be considered available"
+        "access_buffer_meters": 900,
+        "_access_buffer_meters_help": "Metro Transit bus coverage is concentrated in Hennepin and Ramsey counties; 800m is appropriate for the sparse suburban bus network across the 15-county region"
       },
       "survey_rate": "auto",
-      "config_rate": null,
-      "blend_weight": 0,
+      "config_rate": 0.05,
+      "_config_rate_help": "Twin Cities bus share target. ACS shows ~5-6% bus commute in Hennepin/Ramsey but 1-3% in outer counties. Set to 0.05 pre-filtering; chain_consistency will reduce to ~1.5-2% in output",
+      "blend_weight": 0.7,
+      "_blend_weight_help": "Moderate blend weight \u2014 NHTS national bus share (~2%) is closer to TC's actual regional rate than for larger metros, so less override needed",
       "share_adjustment": 0.0
     },
     "rail": {
@@ -93,11 +110,13 @@
         ],
         "_route_types_help": "GTFS route_type codes: 0=Tram/Light Rail, 1=Subway/Metro, 2=Commuter Rail, 12=Monorail",
         "access_buffer_meters": 1200,
-        "_access_buffer_meters_help": "Larger buffer than bus since rail stations are typically more spaced out"
+        "_access_buffer_meters_help": "Only two light rail lines (Blue and Green); 1200m captures station catchment along the two corridors"
       },
       "survey_rate": "auto",
-      "config_rate": null,
-      "blend_weight": 0,
+      "config_rate": 0.01,
+      "_config_rate_help": "Twin Cities rail share target. Only Blue Line (MSP Airport to downtown Minneapolis) and Green Line (Minneapolis to St. Paul). Very limited coverage; set to 0.02 pre-filtering; chain_consistency will reduce to ~0.5-1% in output",
+      "blend_weight": 0.7,
+      "_blend_weight_help": "Moderate blend \u2014 NHTS national rail share (~1%) is close to TC's actual rail usage given limited coverage",
       "share_adjustment": 0.0
     },
     "walk": {
@@ -142,25 +161,26 @@
   },
   "plan_generation": {
     "target_plans": "all",
-    "scaling_factor": 0.01,
+    "scaling_factor": 0.15,
     "work_scaling_multiplier": 1.0,
     "random_seed": 42,
     "skip_if_exists": true,
+    "cache_demand": true,
+    "_cache_demand_help": "true = reuse a previously generated plans.xml when every config value that affects demand is unchanged (region, od_matrix, plan_generation, nonwork, chains, modes, times, lodes year/job_type). Saves the ~13 min plan-generation step when only MATSim or evaluation settings change. Cache lives in {data_dir}/demand_cache/. Changing any demand-affecting value automatically misses the cache.",
     "supported_chain_types": [
       "home_work_home"
     ],
     "chain_sampling_method": "generated",
     "max_chain_retries": 10,
-    "num_processes": 3,
-    "default_mode": "car",
-    "cache_demand": true
+    "num_processes": 30,
+    "default_mode": "car"
   },
   "od_matrix": {
     "source": "auto",
     "_source_help": "auto (default) prefers observed LODES OD and falls back to the gravity model with a loud log line when the region has no LODES coverage; lodes_od requires observed flows and fails if absent; gravity forces the estimated model",
     "boundary_policy": "anchor",
     "_boundary_policy_help": "drop (interim) discards I-E/E-I commutes and reports the counts; anchor re-points the out-of-region end at the in-region zone the trip crosses, so the in-region leg still loads the network. Anchor is the decided target (proposal D4) - switch once stage 3 is validated against counts",
-    "alpha": 0,
+    "alpha": 0.1,
     "friction": "power",
     "_friction_help": "power (legacy default) is d^-beta - unbounded as distance approaches zero, which is the dominant gravity defect; exponential exp(-beta*d) and gamma d^alpha*exp(-beta*d) are bounded. Bounded forms need distance='cosine_km' and a refitted beta in 1/km - see scripts/fit_gravity_beta.py",
     "beta": 1.5,
@@ -267,9 +287,9 @@
   },
   "logging": {
     "level": "DEBUG",
-    "show_progress_bar": false,
-    "log_to_file": false,
-    "log_to_console": false,
+    "show_progress_bar": true,
+    "log_to_file": true,
+    "log_to_console": true,
     "verbose": false
   },
   "network": {
@@ -281,7 +301,9 @@
     "version": "matsim_25",
     "mode": "basic",
     "run_simulation": true,
-    "heap_size_gb": 4,
+    "heap_size_gb": 70,
+    "network_heap_size_gb": 24,
+    "_network_heap_size_gb_help": "Max JVM heap (GB) for the pt2matsim network/GTFS subprocesses (Osm2MultimodalNetwork etc.). Distinct from heap_size_gb which sizes the simulation. Large multi-county/multi-state OSM extracts need 16-32g; default 4 OOMs on metro-scale networks.",
     "transit_network": true,
     "_transit_network_help": "If true, use pt2matsim pipeline to generate a multimodal network (road + transit) from OSM + GTFS. If false, use the default road-only network generator",
     "gtfs_sample_day": "dayWithMostTrips",
@@ -292,7 +314,7 @@
       "_numOfThreads_help": "Number of parallel threads for mapping transit routes to the network. Higher = faster for large networks",
       "candidateDistanceMultiplier": 1.6,
       "_candidateDistanceMultiplier_help": "When fewer than nLinkThreshold candidate links are found, the search radius is expanded by this multiplier. Higher = more aggressive fallback search in sparse/rural areas",
-      "maxLinkCandidateDistance": 90.0,
+      "maxLinkCandidateDistance": 90,
       "_maxLinkCandidateDistance_help": "Maximum distance (meters) to search for candidate network links near a transit stop. Increase for suburban/rural areas where roads are farther from stops",
       "maxTravelCostFactor": 5.0,
       "_maxTravelCostFactor_help": "Maximum allowed cost ratio (mapped route vs free-speed shortest path) for a route segment. Lower = stricter but forces more artificial links which can cause link-order mismatches. Higher = allows pt2matsim to find real-network paths. Range: 1.5 (very strict) to 5.0 (permissive). Our post-validation catches truly bad routes anyway",
@@ -309,19 +331,30 @@
     },
     "configurable_params": {
       "coordinateSystem": "auto",
-      "lastIteration": 5,
+      "lastIteration": 10,
       "outputDirectory": "output",
-      "global.numberOfThreads": 3,
-      "qsim.numberOfThreads": 3,
-      "qsim.flowCapacityFactor": 0.1,
-      "qsim.storageCapacityFactor": 0.12,
-      "linkStats.averageLinkStatsOverIterations": 5
+      "global.numberOfThreads": 30,
+      "qsim.numberOfThreads": 30,
+      "qsim.flowCapacityFactor": 0.15,
+      "qsim.storageCapacityFactor": 0.15,
+      "linkStats.averageLinkStatsOverIterations": 2,
+      "scoring.modeParams.pt.constant": 1.5,
+      "scoring.waitingPt": -1.0,
+      "_estimator_scoring.waitingPt": "Cold start (no prior experiment). Seeding waitingPt=-3.0 util/hr for transit density 2.58% (low-transit (1%-5%)).",
+      "scoring.modeParams.walk.constant": -1.0,
+      "_estimator_scoring.modeParams.walk.constant": "Cold start (no prior experiment). ACS walk share 1.96%. Seeding walk.constant=-1.0; subsequent runs will correct toward ACS using the clamped log-ratio update.",
+      "transitRouter.searchRadius": 1200.0,
+      "transitRouter.maxBeelineWalkConnectionDistance": 300.0,
+      "transitRouter.extensionRadius": 200.0,
+      "_estimator_transitRouter.maxBeelineWalkConnectionDistance": "Cold start (no prior experiment). ACS transit share 2.58% (low transit (<5%)). Seeding transit-router params from tier table; subsequent runs with --experiment-dir adjust by one tier when realised PT share is outside [70%, 130%] of the ACS target. Setting maxBeelineWalkConnectionDistance=250.0.",
+      "transitRouter.directWalkFactor": 1.5,
+      "_estimator_transitRouter.directWalkFactor": "Cold start (no prior experiment). ACS transit share 2.58% (low transit (<5%)). Seeding transit-router params from tier table; subsequent runs with --experiment-dir adjust by one tier when realised PT share is outside [70%, 130%] of the ACS target. Setting directWalkFactor=1.3."
     },
     "write_intermediate_output": false
   },
   "counts": {
     "enabled": true,
-    "rebuild": false,
+    "rebuild": true,
     "_rebuild_help": "If true, regenerate counts.xml and matched_devices.csv even if they already exist. Set to false to reuse cached files",
     "fha": {
       "data_dir": "data/FHA_counts",
@@ -333,7 +366,7 @@
       "_weight_help": "Blending weight for FHA data when both FHA and custom sources match the same network link"
     },
     "custom": {
-      "enabled": true,
+      "enabled": false,
       "_enabled_help": "If true, look for counts_stations.csv and counts_volumes.csv in the evaluation folder. If files are missing or invalid, falls back to FHA-only with a warning",
       "weight": 0,
       "_weight_help": "Blending weight for custom data when both sources match the same network link"
@@ -354,7 +387,7 @@
     }
   },
   "nonwork_purposes": {
-    "nonwork_trip_share": 0.1,
+    "nonwork_trip_share": 0.8,
     "_nonwork_trip_share_help": "Share of non-workers who travel on a given day (0.60 = 60%). Applied as a multiplier to all non-work trip categories",
     "Shopping": {
       "enabled": true,
@@ -362,9 +395,9 @@
         "_comment": "Controls what percentage of non-employees make shopping trips per day",
         "survey_rate": "auto",
         "_survey_rate_help": "Trip rate from TBI survey data. Use 'auto' to calculate from survey, or specify a float value (e.g., 0.35 for 35%)",
-        "config_rate": 0.2,
+        "config_rate": 0.25,
         "_config_rate_help": "Target/expected trip rate (e.g., 0.30 means 30% of non-employees make shopping trips)",
-        "blend_weight": 0.5,
+        "blend_weight": 0.7,
         "_blend_weight_help": "Weight for blending rates: 0.0 = use survey rate only, 1.0 = use config rate only, 0.5 = average both (recommended)"
       },
       "od_matrix": {
@@ -397,9 +430,9 @@
         "_comment": "Controls what percentage of non-employees make school trips per day",
         "survey_rate": "auto",
         "_survey_rate_help": "Trip rate from TBI survey data. Use 'auto' to calculate from survey, or specify a float value",
-        "config_rate": 0.2,
-        "_config_rate_help": "Target/expected trip rate for one-county test (low value for faster testing)",
-        "blend_weight": 0.5,
+        "config_rate": 0.25,
+        "_config_rate_help": "Target/expected trip rate (e.g., 0.20 means 20% of non-employees make school trips)",
+        "blend_weight": 0.7,
         "_blend_weight_help": "Weight for blending rates: 0.0 = use survey rate only, 1.0 = use config rate only, 0.5 = average both"
       },
       "od_matrix": {
@@ -429,9 +462,9 @@
         "_comment": "Controls what percentage of non-employees make social/recreation trips per day",
         "survey_rate": "auto",
         "_survey_rate_help": "Trip rate from TBI survey data. Use 'auto' to calculate from survey, or specify a float value",
-        "config_rate": 0.2,
-        "_config_rate_help": "Target/expected trip rate for one-county test (low value for faster testing)",
-        "blend_weight": 0.5,
+        "config_rate": 0.15,
+        "_config_rate_help": "Target/expected trip rate (e.g., 0.25 means 25% of non-employees make social/recreation trips)",
+        "blend_weight": 0.7,
         "_blend_weight_help": "Weight for blending rates: 0.0 = use survey rate only, 1.0 = use config rate only, 0.5 = average both"
       },
       "od_matrix": {
@@ -458,9 +491,9 @@
         "_comment": "Controls what percentage of non-employees make dining trips per day",
         "survey_rate": "auto",
         "_survey_rate_help": "Trip rate from TBI survey data. Use 'auto' to calculate from survey, or specify a float value",
-        "config_rate": 0.2,
-        "_config_rate_help": "Target/expected trip rate for one-county test (low value for faster testing)",
-        "blend_weight": 0.5,
+        "config_rate": 0.15,
+        "_config_rate_help": "Target/expected trip rate (e.g., 0.20 means 20% of non-employees make dining trips)",
+        "blend_weight": 0.7,
         "_blend_weight_help": "Weight for blending rates: 0.0 = use survey rate only, 1.0 = use config rate only, 0.5 = average both"
       },
       "od_matrix": {
@@ -486,8 +519,8 @@
         "survey_rate": "auto",
         "_survey_rate_help": "Trip rate from TBI survey data. Use 'auto' to calculate from survey, or specify a float value",
         "config_rate": 0.2,
-        "_config_rate_help": "Target/expected trip rate for one-county test (low value for faster testing)",
-        "blend_weight": 0.5,
+        "_config_rate_help": "Target/expected trip rate (e.g., 0.15 means 15% of non-employees make other trips)",
+        "blend_weight": 0.7,
         "_blend_weight_help": "Weight for blending rates: 0.0 = use survey rate only, 1.0 = use config rate only, 0.5 = average both"
       },
       "od_matrix": {
@@ -495,8 +528,9 @@
         "alpha": 0.1
       },
       "poi_weighting": {
-        "enabled": false
+        "enabled": true
       }
     }
-  }
+  },
+  "_config_dir": "config/USA/TwinCities"
 }

@@ -7,7 +7,7 @@
     ]
   },
   "data": {
-    "data_dir": "/path/to/your/data",
+    "data_dir": "/home/exouser/Documents/Tareek/data",
     "lodes": {
       "year": 2023,
       "job_type": "JT00",
@@ -26,7 +26,8 @@
         "file": "nhts/csv/tripv2pub.csv",
         "weight": 1
       }
-    ]
+    ],
+    "census_api_key": "YOUR_CENSUS_API_KEY_HERE"
   },
   "gtfs": {
     "_comment": "GTFS transit feed discovery and caching. Feeds are auto-discovered from the Mobility Database catalog by intersecting feed bounding boxes with the configured region counties",
@@ -46,7 +47,7 @@
     }
   },
   "modes": {
-    "_comment": "Transportation modes. Each key is a mode name. Set 'enabled': false to disable a mode without removing its config. Modes are flat — bus and rail are separate entries, not sub-modes of 'pt'",
+    "_comment": "Transportation modes. Each key is a mode name. Set 'enabled': false to disable a mode without removing its config. Modes are flat \u2014 bus and rail are separate entries, not sub-modes of 'pt'",
     "_enabled_help": "Set to false to disable this mode. Disabled modes are excluded from mode choice, availability checking, GTFS setup, and MATSim transit config. Default is true if omitted",
     "_matsim_mode_help": "The mode string written to MATSim plans.xml legs. Multiple modes can map to the same MATSim mode (e.g., bus and rail both map to 'pt')",
     "_availability_help": "How to determine if a mode is available for a given OD pair. String 'universal' = always available. Object with 'type' key: 'gtfs' = available if GTFS stops exist near both origin and destination, 'distance' = available if OD distance is within max, 'zone_list' = available if both locations are in specified zones",
@@ -68,7 +69,10 @@
       "matsim_mode": "pt",
       "availability": {
         "type": "gtfs",
-        "route_types": [3, 11],
+        "route_types": [
+          3,
+          11
+        ],
         "_route_types_help": "GTFS route_type codes: 3=Bus, 11=Trolleybus. See GTFS spec for full list",
         "access_buffer_meters": 800,
         "_access_buffer_meters_help": "Maximum walking distance (meters) from origin/destination to nearest transit stop for this mode to be considered available"
@@ -83,7 +87,12 @@
       "matsim_mode": "pt",
       "availability": {
         "type": "gtfs",
-        "route_types": [0, 1, 2, 12],
+        "route_types": [
+          0,
+          1,
+          2,
+          12
+        ],
         "_route_types_help": "GTFS route_type codes: 0=Tram/Light Rail, 1=Subway/Metro, 2=Commuter Rail, 12=Monorail",
         "access_buffer_meters": 1200,
         "_access_buffer_meters_help": "Larger buffer than bus since rail stations are typically more spaced out"
@@ -127,7 +136,7 @@
     "fallback_mode": "car",
     "_fallback_mode_help": "Mode to use when no other mode is available for an OD pair (e.g., rural area with no transit and distance too far for walk/bike)",
     "chain_consistency": true,
-    "_chain_consistency_help": "If true, all legs in an activity chain use the same mode (e.g., home→work→home both by car). Mode is sampled once using modes available for ALL legs",
+    "_chain_consistency_help": "If true, all legs in an activity chain use the same mode (e.g., home\u2192work\u2192home both by car). Mode is sampled once using modes available for ALL legs",
     "min_samples_per_purpose": 30,
     "_min_samples_per_purpose_help": "Minimum survey trips needed per trip purpose to compute purpose-specific mode shares. Below this threshold, falls back to overall 'all' rates",
     "max_chain_mode_retries": 5,
@@ -145,11 +154,23 @@
     "chain_sampling_method": "generated",
     "max_chain_retries": 100,
     "num_processes": 30,
-    "default_mode": "car"
+    "default_mode": "car",
+    "cache_demand": true
   },
   "od_matrix": {
+    "source": "auto",
+    "_source_help": "auto (default) prefers observed LODES OD and falls back to the gravity model with a loud log line when the region has no LODES coverage; lodes_od requires observed flows and fails if absent; gravity forces the estimated model",
+    "boundary_policy": "anchor",
+    "_boundary_policy_help": "drop (interim) discards I-E/E-I commutes and reports the counts; anchor re-points the out-of-region end at the in-region zone the trip crosses, so the in-region leg still loads the network. Anchor is the decided target (proposal D4) - switch once stage 3 is validated against counts",
     "alpha": 0.1,
+    "friction": "power",
+    "_friction_help": "power (legacy default) is d^-beta - unbounded as distance approaches zero, which is the dominant gravity defect; exponential exp(-beta*d) and gamma d^alpha*exp(-beta*d) are bounded. Bounded forms need distance='cosine_km' and a refitted beta in 1/km - see scripts/fit_gravity_beta.py",
     "beta": 1.5,
+    "_beta_help": "distance decay. Units depend on friction: dimensionless for power, 1/km for exponential/gamma. Refit per form.",
+    "distance": "cosine_km",
+    "_distance_help": "cosine_km (default) measures pair distances in km with a latitude cosine correction and sets intrazonal distance from zone area; legacy_degrees reproduces pre-stage-1 behaviour (raw degrees, 0.1deg zero-guard) for ablation arm A",
+    "intrazonal_factor": 0.5,
+    "_intrazonal_factor_help": "intrazonal distance = factor * sqrt(zone area); zone area is estimated from the spread of member block points",
     "max_iterations": 200,
     "convergence_threshold": 0.03
   },
@@ -243,7 +264,7 @@
     "rebuild_network": false,
     "_rebuild_network_help": "If true, force regeneration of the network even if a cached version exists. Useful when the cached network has issues. After a successful rebuild, set back to false to re-enable caching"
   },
-  "matsim": { 
+  "matsim": {
     "version": "matsim_25",
     "mode": "basic",
     "run_simulation": true,
@@ -265,7 +286,7 @@
       "nLinkThreshold": 6,
       "_nLinkThreshold_help": "Minimum number of candidate links to find within maxLinkCandidateDistance before expanding search by candidateDistanceMultiplier",
       "travelCostType": "linkLength",
-      "_travelCostType_help": "Cost metric for routing during schedule-to-network mapping. 'linkLength' = use link distance, 'travelTime' = use free-speed travel time",      
+      "_travelCostType_help": "Cost metric for routing during schedule-to-network mapping. 'linkLength' = use link distance, 'travelTime' = use free-speed travel time",
       "removeNotUsedStopFacilities": true,
       "_removeNotUsedStopFacilities_help": "Remove stop facilities that could not be mapped to the network. Prevents orphan stops from causing errors",
       "routingWithCandidateDistance": true,
@@ -280,9 +301,10 @@
       "global.numberOfThreads": 12,
       "qsim.numberOfThreads": 6,
       "qsim.flowCapacityFactor": 0.15,
-      "qsim.storageCapacityFactor": 0.20,
+      "qsim.storageCapacityFactor": 0.2,
       "linkStats.averageLinkStatsOverIterations": 5
-    }
+    },
+    "write_intermediate_output": false
   },
   "counts": {
     "enabled": false,
@@ -301,10 +323,18 @@
     "run_evaluation": false,
     "ground_truth_data_dir": "data/evaluation",
     "generate_spatial_maps": true,
-    "generate_per_device_reports": true
+    "generate_per_device_reports": true,
+    "report_tolerances": {
+      "volume_ratio_band": 0.1,
+      "trips_per_person_band": 0.1,
+      "station_cv_uniform": 0.35,
+      "correlation_min": 0.85,
+      "geh_lt5_pct_min": 85.0,
+      "mode_share_flag_pp": 2.0
+    }
   },
   "nonwork_purposes": {
-    "nonwork_trip_share": 0.60,
+    "nonwork_trip_share": 0.6,
     "_nonwork_trip_share_help": "Share of non-workers who travel on a given day (0.60 = 60%). Applied as a multiplier to all non-work trip categories",
     "Shopping": {
       "enabled": true,
