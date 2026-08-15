@@ -895,33 +895,50 @@ def reconcile_with_direct_aggregation(matrix: pd.DataFrame,
     """Check the zone matrix totals against the raw flow table (gate G2).
 
     The matrix is built by grouping block pairs into zones, so its total must
-    equal the I-I flow total up to reindex losses. A mismatch means trips were
-    dropped or double-counted somewhere in the assembly.
+    equal the flow total that went into it, up to reindex losses. A mismatch
+    means trips were dropped or double-counted somewhere in the assembly.
+
+    Under ``boundary_policy='anchor'`` the assembly deliberately adds the
+    re-pointed I-E/E-I commutes on top of the I-I flows, so the expected total
+    is internal_ii + anchored_total. Comparing against internal_ii alone would
+    report every anchored run as a failure.
 
     Returns a dict recording the check; logs a WARNING if it fails.
     """
     matrix_total = float(matrix.to_numpy().sum())
-    flow_total = float(observed.totals.internal_ii)
+    internal_total = float(observed.totals.internal_ii)
+    anchored_total = float(
+        (getattr(observed, "boundary_stats", None) or {}).get("anchored_total", 0) or 0
+    )
+    flow_total = internal_total + anchored_total
     delta = matrix_total - flow_total
 
     result = {
         "matrix_total": matrix_total,
         "direct_aggregation_total": flow_total,
+        "internal_ii_total": internal_total,
+        "anchored_total": anchored_total,
         "delta": delta,
         "within_tolerance": abs(delta) <= tolerance,
         "aux_sourced_ii": observed.aux_sourced_ii,
     }
 
+    breakdown = (
+        f"{internal_total:,.0f} I-I + {anchored_total:,.0f} anchored"
+        if anchored_total
+        else f"{internal_total:,.0f} I-I"
+    )
+
     if result["within_tolerance"]:
         logger.info(
             f"  Reconciliation OK: matrix {matrix_total:,.0f} vs direct "
-            f"aggregation {flow_total:,.0f} (delta {delta:+,.0f})"
+            f"aggregation {flow_total:,.0f} ({breakdown}) (delta {delta:+,.0f})"
         )
     else:
         logger.warning(
             f"  RECONCILIATION FAILED: matrix {matrix_total:,.0f} vs direct "
-            f"aggregation {flow_total:,.0f} (delta {delta:+,.0f}). Trips were "
-            f"lost or duplicated during zone assembly."
+            f"aggregation {flow_total:,.0f} ({breakdown}) (delta {delta:+,.0f}). "
+            f"Trips were lost or duplicated during zone assembly."
         )
 
     return result

@@ -28,6 +28,32 @@ class MATSimRunner:
         self.matsim_config = config.get('matsim', {})
         self.os_type = platform.system()
 
+    @staticmethod
+    def _clamp_heap_to_ram(requested_gb: int) -> int:
+        """Cap the requested -Xmx (GB) at ~70% of physical RAM.
+
+        The simulation is launched with -Xms equal to -Xmx, so the JVM reserves
+        the whole heap at startup and fails outright ("Could not reserve enough
+        space for object heap") when the config asks for more than the machine
+        has. Clamping keeps a config written for a large machine usable on a
+        smaller one while leaving headroom for the OS and Python. Never goes
+        below 2g. Falls back to the requested value if RAM can't be determined.
+        Mirrors NetworkGenerator._clamp_heap_to_ram.
+        """
+        try:
+            import psutil
+            total_gb = psutil.virtual_memory().total / (1024 ** 3)
+            safe_cap = max(2, int(total_gb * 0.70))
+            if requested_gb > safe_cap:
+                logger.warning(
+                    f"heap_size_gb={requested_gb}g exceeds 70% of physical RAM "
+                    f"({total_gb:.1f}g); clamping to {safe_cap}g."
+                )
+                return safe_cap
+        except Exception as e:
+            logger.debug(f"Could not determine RAM for heap clamp: {e}")
+        return requested_gb
+
     def get_jar_path(self) -> Path:
         """
         Get path to MATSim JAR file
@@ -104,7 +130,7 @@ class MATSimRunner:
             Command as list of strings
         """
         classpath = self.build_classpath()
-        heap_size = self.matsim_config.get('heap_size_gb', 32)
+        heap_size = self._clamp_heap_to_ram(self.matsim_config.get('heap_size_gb', 32))
 
         # Build command with JVM performance optimizations
         # Note: These are JVM flags, not MATSim arguments
