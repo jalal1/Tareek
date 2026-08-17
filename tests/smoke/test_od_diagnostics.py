@@ -219,3 +219,83 @@ def test_diagnostics_has_stable_shape_across_sources(tmp_path):
                 "comparison_to_gravity_base", "survey_blend", "trip_length",
                 "boundary", "demand_coverage"):
         assert key in payload, f"{key} must be present even when unset"
+
+
+# ---------------------------------------------------------------------------
+# G2 reconciliation under boundary_policy=anchor
+# ---------------------------------------------------------------------------
+#
+# "RECONCILIATION FAILED: ... Trips were lost or duplicated during zone
+# assembly" fired on every anchored run, because the check compared an anchored
+# matrix against the I-I total alone. The warning looks like data corruption and
+# invites either a wild-goose chase or "fixing" demand that is already correct.
+#
+# It was fixed once for the freshly-built matrix path, and still fired on the
+# *cached* path, which returns before boundary_stats is recorded. Both paths are
+# pinned here.
+
+from types import SimpleNamespace
+
+from data_sources.lodes_od import (
+    _boundary_stats_for_policy,
+    reconcile_with_direct_aggregation,
+)
+
+
+def _observed(internal_ii=56_208, outbound_ie=137_767, inbound_ei=80_410):
+    return SimpleNamespace(
+        totals=FlowTotals(internal_ii=internal_ii,
+                          outbound_ie=outbound_ie,
+                          inbound_ei=inbound_ei),
+        aux_sourced_ii=False,
+        boundary_stats={},
+    )
+
+
+@pytest.mark.smoke
+def test_anchor_stats_derive_the_boundary_total():
+    """The cached path has no anchoring step, so it derives the total."""
+    observed = _observed()
+    stats = _boundary_stats_for_policy(observed, 'anchor')
+    assert stats['anchored_total'] == 137_767 + 80_410
+
+
+@pytest.mark.smoke
+def test_drop_policy_anchors_nothing():
+    stats = _boundary_stats_for_policy(_observed(), 'drop')
+    assert stats['anchored_total'] == 0
+
+
+@pytest.mark.smoke
+def test_cached_anchored_matrix_reconciles():
+    """The real false alarm, with the numbers from the run that produced it."""
+    observed = _observed()
+    observed.boundary_stats = _boundary_stats_for_policy(observed, 'anchor')
+    matrix = pd.DataFrame(np.array([[274_385.0]]))
+
+    result = reconcile_with_direct_aggregation(matrix, observed)
+    assert result['within_tolerance'], result
+
+
+@pytest.mark.smoke
+def test_small_anchoring_loss_is_tolerated():
+    """A boundary flow whose external end finds no crossing zone is dropped.
+
+    Measured: 31 trips of 294,868 on the 15-county run. An absolute tolerance
+    of 1 would fail that correct run.
+    """
+    observed = _observed()
+    observed.boundary_stats = _boundary_stats_for_policy(observed, 'anchor')
+    matrix = pd.DataFrame(np.array([[274_385.0 - 31]]))
+
+    assert reconcile_with_direct_aggregation(matrix, observed)['within_tolerance']
+
+
+@pytest.mark.smoke
+def test_a_genuine_assembly_loss_still_fails():
+    """The check must not be so loose that it stops catching real bugs."""
+    observed = _observed()
+    observed.boundary_stats = _boundary_stats_for_policy(observed, 'anchor')
+    matrix = pd.DataFrame(np.array([[200_000.0]]))
+
+    assert not reconcile_with_direct_aggregation(matrix, observed)['within_tolerance']

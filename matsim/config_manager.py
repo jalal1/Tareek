@@ -10,6 +10,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# The vehiclesSource that reads one vehicle type per network mode. Defined here
+# rather than imported from models.freight so config_manager keeps no
+# dependency on the modelling stack.
+VEHICLES_SOURCE = 'modeVehicleTypesFromVehiclesData'
+
 
 class ConfigManager:
     """Manage MATSim configuration files"""
@@ -250,6 +255,158 @@ class ConfigManager:
             ET.SubElement(scoring_params, 'param', {'name': param_name, 'value': str(param_value)})
         logger.info(f"Applied scoring.{param_name} = {param_value}")
 
+    # ── Generic parameterset helpers ────────────────────────────────────────
+    #
+    # MATSim nests much of its configuration in <parameterset> blocks keyed by
+    # an inner <param>, which the flat module.parameter addressing above cannot
+    # reach. update_mode_param already does this for modeParams; these do the
+    # same for activityParams and strategysettings. They are deliberately
+    # generic — nothing here is freight-specific — so other features can add
+    # activity types or per-subpopulation strategies without new plumbing.
+
+    def _get_scoring_parameterset(self, tree: ET.ElementTree) -> Optional[ET.Element]:
+        """Return the <parameterset type="scoringParameters"> node, or None."""
+        root = tree.getroot()
+        scoring_module = next(
+            (m for m in root.findall('module') if m.get('name') == 'scoring'),
+            None,
+        )
+        if scoring_module is None:
+            return None
+        return scoring_module.find("parameterset[@type='scoringParameters']")
+
+    def add_activity_params(
+        self,
+        tree: ET.ElementTree,
+        activity_type: str,
+        params: Dict[str, str],
+    ) -> None:
+        """Register scoring parameters for one activity type.
+
+        MATSim scores every activity it encounters and fails on an activity
+        type it has no parameters for, so any generator that introduces a new
+        activity type must declare it here.
+
+        An existing block for the same type is updated rather than duplicated:
+        two activityParams with the same activityType is a MATSim startup
+        error, and this method may run over a template that already has one.
+        """
+        scoring_params = self._get_scoring_parameterset(tree)
+        if scoring_params is None:
+            logger.warning(
+                f"scoringParameters missing — cannot register activity "
+                f"'{activity_type}'"
+            )
+            return
+
+        target = None
+        for ps in scoring_params.findall("parameterset[@type='activityParams']"):
+            type_param = ps.find("param[@name='activityType']")
+            if type_param is not None and type_param.get('value') == activity_type:
+                target = ps
+                break
+
+        if target is None:
+            # Insert before the modeParams blocks to keep the template readable;
+            # MATSim itself does not care about parameterset order.
+            target = ET.Element('parameterset', {'type': 'activityParams'})
+            ET.SubElement(target, 'param',
+                          {'name': 'activityType', 'value': activity_type})
+            insert_at = len(scoring_params)
+            for idx, child in enumerate(scoring_params):
+                if child.get('type') == 'modeParams':
+                    insert_at = idx
+                    break
+            scoring_params.insert(insert_at, target)
+
+        for name, value in params.items():
+            existing = target.find(f"param[@name='{name}']")
+            if existing is not None:
+                existing.set('value', str(value))
+            else:
+                ET.SubElement(target, 'param',
+                              {'name': name, 'value': str(value)})
+
+        logger.info(f"Registered scoring activityParams for '{activity_type}'")
+
+    def set_replanning_strategies(
+        self,
+        tree: ET.ElementTree,
+        strategies: list,
+        subpopulation: Optional[str] = None,
+    ) -> None:
+        """Replace the strategysettings for one subpopulation.
+
+        A strategysettings block with no ``subpopulation`` param applies to
+        every agent. That is the template's default and is correct while there
+        is one population, but the moment a second subpopulation exists the
+        untagged strategies still reach it — so introducing any subpopulation
+        means naming ``default`` explicitly on the existing blocks. Callers do
+        that by calling this method once per subpopulation.
+
+        Args:
+            tree: the config tree.
+            strategies: [{'strategyName': str, 'weight': float}, ...].
+            subpopulation: the subpopulation these apply to. None leaves the
+                blocks untagged (whole-population behaviour).
+        """
+        root = tree.getroot()
+        replanning = next(
+            (m for m in root.findall('module') if m.get('name') == 'replanning'),
+            None,
+        )
+        if replanning is None:
+            logger.warning("replanning module missing — cannot set strategies")
+            return
+
+        # Drop the blocks this call owns, so repeated calls are idempotent and
+        # a shrinking strategy list does not leave orphans behind.
+        for ps in list(replanning.findall("parameterset[@type='strategysettings']")):
+            sub_param = ps.find("param[@name='subpopulation']")
+            existing_sub = sub_param.get('value') if sub_param is not None else None
+            if existing_sub == subpopulation:
+                replanning.remove(ps)
+
+        for strategy in strategies:
+            ps = ET.SubElement(replanning, 'parameterset',
+                               {'type': 'strategysettings'})
+            ET.SubElement(ps, 'param',
+                          {'name': 'strategyName',
+                           'value': str(strategy['strategyName'])})
+            ET.SubElement(ps, 'param',
+                          {'name': 'weight', 'value': str(strategy['weight'])})
+            if subpopulation is not None:
+                ET.SubElement(ps, 'param',
+                              {'name': 'subpopulation', 'value': subpopulation})
+
+        named = subpopulation or 'all agents'
+        logger.info(
+            f"Set replanning strategies for {named}: "
+            + ', '.join(f"{s['strategyName']}={s['weight']}" for s in strategies)
+        )
+
+    def _read_replanning_strategies(self, tree: ET.ElementTree) -> list:
+        """Return the untagged strategysettings currently in the tree."""
+        root = tree.getroot()
+        replanning = next(
+            (m for m in root.findall('module') if m.get('name') == 'replanning'),
+            None,
+        )
+        if replanning is None:
+            return []
+
+        strategies = []
+        for ps in replanning.findall("parameterset[@type='strategysettings']"):
+            if ps.find("param[@name='subpopulation']") is not None:
+                continue
+            name = ps.find("param[@name='strategyName']")
+            weight = ps.find("param[@name='weight']")
+            if name is None or weight is None:
+                continue
+            strategies.append({'strategyName': name.get('value'),
+                               'weight': weight.get('value')})
+        return strategies
+
     def _get_enabled_transit_modes(self) -> list:
         """Return list of enabled mode names that map to MATSim 'pt' (transit modes)."""
         modes_config = self.config.get('modes', {})
@@ -364,6 +521,141 @@ class ConfigManager:
         )
         logger.info(f"Enabled transit module with transitModes={transit_modes_str} "
                     f"(from enabled modes: {transit_mode_names}){preserved_note}")
+
+    def configure_freight(self, tree: ET.ElementTree, last_iteration: int) -> None:
+        """Make the config safe for a freight subpopulation.
+
+        Three things have to be true before a truck can move, and all three
+        fail quietly or late if they are missing:
+
+        1. ``freight_origin`` / ``freight_destination`` need activityParams, or
+           MATSim aborts on an unscoreable activity.
+        2. The template's strategies apply to the whole population, so a truck
+           would be handed to SubtourModeChoice (which can turn it into a
+           pedestrian) and TimeAllocationMutator (which retimes its departure,
+           destroying the sampled profile). Freight gets ReRoute plus a
+           selector only. Re-routing around congestion is the reason to
+           simulate trucks at all; mode and time are not theirs to change.
+        3. The existing strategies must be tagged ``default`` at the same time.
+           An untagged block applies to every agent, so leaving them untagged
+           would give freight both strategy sets.
+
+        Events are also enabled when requested, because the freight-only link
+        volumes that validation compares against truck counts can only be
+        recovered from the events file — no other MATSim output distinguishes
+        one vehicle from another.
+        """
+        freight_config = self.config.get('freight', {})
+        if not freight_config.get('enabled', False):
+            return
+
+        subpopulation = freight_config.get('subpopulation', 'freight')
+
+        for activity_type in ('freight_origin', 'freight_destination'):
+            # A short typical duration and no opening/closing window: a freight
+            # stop is not a scheduled activity, and a window would invite
+            # scoring to reschedule it.
+            self.add_activity_params(tree, activity_type, {
+                'typicalDuration': '00:30:00',
+                'scoringThisActivityAtAll': 'false',
+            })
+
+        # The passenger strategies stay **untagged**, and that is deliberate.
+        #
+        # The obvious move is to tag them `subpopulation="default"` to mirror
+        # the freight block. It fails: MATSim resolves an agent's subpopulation
+        # from a person attribute, and passenger persons carry no attributes at
+        # all, so it reads `null` — not `"default"`. A `default`-tagged strategy
+        # then matches nobody and the run dies at the first replanning step with
+        # "No strategy found! ... Current subpopulation = null".
+        #
+        # An untagged block is MATSim's catch-all and does match null, so
+        # leaving the passenger strategies alone is what actually works. Only
+        # freight is tagged, because only freight persons are labelled.
+        #
+        # The alternative — writing a subpopulation attribute onto all ~58k
+        # passenger persons — would also work, at the cost of a much larger
+        # plans.xml for no behavioural gain.
+        #
+        # Found by running it: the config looked exactly like the design said
+        # it should, and MATSim rejected it. See docs/freight/design.md §1.4.
+        existing = self._read_replanning_strategies(tree)
+        if not existing:
+            logger.warning(
+                "No untagged replanning strategies found. Passenger agents "
+                "carry no subpopulation attribute, so they need an untagged "
+                "block; without one MATSim aborts at the first replanning step."
+            )
+
+        self.set_replanning_strategies(
+            tree,
+            [{'strategyName': 'ChangeExpBeta', 'weight': 0.8},
+             {'strategyName': 'ReRoute', 'weight': 0.2}],
+            subpopulation=subpopulation,
+        )
+
+        if freight_config.get('require_events', True):
+            # write_intermediate_output may already have set this; either way
+            # the final iteration must emit events.
+            self._set_or_add_parameter(tree, 'controller', 'writeEventsInterval',
+                                       str(last_iteration))
+            logger.info(
+                f"Freight: writeEventsInterval = {last_iteration} so the final "
+                f"iteration emits events (needed to isolate the truck stream)"
+            )
+
+        if freight_config.get('pce', {}).get('enabled', False):
+            self._enable_vehicles_module(tree)
+
+    def _enable_vehicles_module(self, tree: ET.ElementTree) -> None:
+        """Point MATSim at vehicles.xml and set the vehicles source.
+
+        ``modeVehicleTypesFromVehiclesData`` reads one vehicle type per network
+        mode, named after the mode, and honours an optional per-person
+        ``vehicleTypes`` attribute that names a more specific type. That is what
+        lets one ``car`` type cover the whole passenger population while freight
+        persons override to a truck type.
+
+        This is separate from ``transit.vehiclesFile``, which pt2matsim writes:
+        MATSim reads the two through different parameters and they do not
+        collide.
+
+        **``vehiclesSource`` is a QSim parameter and must not be written to the
+        hermes module.** Verified the hard way: MATSim 25 aborts at config-parse
+        time with "Module hermes ... doesn't accept unknown parameters.
+        Parameter vehiclesSource is not part of the valid parameters:
+        [mainMode, stuckTime, flowCapacityFactor, storageCapacityFactor,
+        endTime, useDeterministicPt]". ``HermesConfigGroup`` is a
+        ``ReflectiveConfigGroup``, so an unknown parameter is a fatal error
+        rather than a warning, and this run uses ``mobsim=hermes``.
+
+        Hermes still applies PCE — ``ScenarioImporter`` reads
+        ``getVehicleTypes()`` and builds ``flowCapacityPCEs`` /
+        ``storageCapacityPCEs`` from it. It needs no source parameter because
+        the types come from the scenario, which ``vehicles.vehiclesFile``
+        above already populates.
+        """
+        root = tree.getroot()
+
+        vehicles = next(
+            (m for m in root.findall('module') if m.get('name') == 'vehicles'),
+            None,
+        )
+        if vehicles is None:
+            vehicles = ET.SubElement(root, 'module', name='vehicles')
+        self._set_or_add_parameter(tree, 'vehicles', 'vehiclesFile', 'vehicles.xml')
+
+        # QSim only. Hermes rejects this parameter outright (see the docstring)
+        # and does not need it: it takes vehicle types from the scenario.
+        if any(m.get('name') == 'qsim' for m in root.findall('module')):
+            self._set_or_add_parameter(tree, 'qsim', 'vehiclesSource',
+                                       VEHICLES_SOURCE)
+
+        logger.info(
+            f"Freight PCE enabled: vehicles.xml registered, "
+            f"qsim vehiclesSource={VEHICLES_SOURCE} (hermes takes vehicle "
+            f"types from the scenario and rejects the parameter)"
+        )
 
     def generate_config(
         self,
@@ -533,6 +825,11 @@ class ConfigManager:
         if self.matsim_config.get('transit_network', False):
             self._enable_transit_module(tree)
 
+        # Freight last, so it sees the final strategy list and iteration count.
+        # It reads the strategies the template plus configurable_params left in
+        # place, and re-tags them, which only works once they are settled.
+        self.configure_freight(tree, last_iteration)
+
         # Save to file
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -603,6 +900,16 @@ class ConfigManager:
                             if transit_param.get('name') in ['transitScheduleFile', 'vehiclesFile']:
                                 transit_file = config_dir / transit_param.get('value')
                                 required_files.append((transit_param.get('name'), transit_file))
+
+            # The freight vehicles file, when PCE is on. Distinct from the
+            # transit one above: MATSim reads them through different modules.
+            # Without this check a missing file surfaces as a MATSim startup
+            # crash after the expensive steps have already run.
+            if module.get('name') == 'vehicles':
+                for param in module.findall('param'):
+                    if param.get('name') == 'vehiclesFile':
+                        required_files.append(
+                            ('vehicles.xml', config_dir / param.get('value')))
 
         # Validate files exist
         all_valid = True
