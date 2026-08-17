@@ -68,6 +68,15 @@ class WorkLocation(Base):
     # Number of employees working in the block
     n_employees = Column(Integer, nullable=False, default=0)
 
+    # Freight-relevant employment, summed from the LODES WAC CNS* sector
+    # columns that arrive in the same download as C000. A warehouse and an
+    # office of the same headcount generate very different truck traffic, which
+    # total employment cannot express; Memphis regresses truck trips on sector
+    # employment with R^2 0.77-1.00. Nullable because rows written before this
+    # column existed have no value, and a freight run must not require a
+    # re-download to work — see freight.internal_attractor.
+    n_employees_freight = Column(Integer, nullable=True)
+
     # Work location point coordinates (geographic coordinates in EPSG:4326)
     lat = Column(Float, nullable=True)
     lon = Column(Float, nullable=True)

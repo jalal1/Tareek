@@ -370,5 +370,82 @@
         "enabled": true
       }
     }
+  },
+  "freight": {
+    "_help": "Boundary truck trips (E-I, I-E, E-E). See docs/freight/design.md",
+    "enabled": false,
+
+    "demand_source": "hpms_cordon",
+    "_demand_source_help": "hpms_cordon | car_share | absolute",
+    "truck_share": null,
+    "_truck_share_help": "null = resolve from HPMS/national table; a number pins it",
+    "demand_scale": 1.0,
+    "_demand_scale_help": "fraction of observed boundary freight to simulate. 1.0 = the full HPMS-derived volume. NOT a calibration target - the cordon screenline cannot judge it, because its yardstick is the same cordon weighting the demand comes from. Lower it only as a deliberate throttle.",
+    "trips_per_day": null,
+    "hpms": {
+      "enabled": true,
+      "service_url": "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/hpms_v2_view/FeatureServer/0",
+      "cache_dir": "data/hpms",
+      "cache_days": 90,
+      "timeout_seconds": 30
+    },
+    "hpms_match": {
+      "_help": "Stage 9: match each cordon to its HPMS segment so weights come from observed truck AADT instead of capacity. Any failure falls back to capacity; it never stops a run.",
+      "radius_m": 150.0,
+      "_radius_m_help": "how far from a cordon to look for an HPMS centreline; must exceed a carriageway separation without reaching a different road",
+      "bearing_tolerance_deg": 45.0,
+      "_bearing_tolerance_help": "direction agreement required. Without it an inbound cordon takes the opposing carriageway's volume ~half the time",
+      "bbox_pad_km": 5.0,
+      "min_truck_aadt": 50.0,
+      "_min_truck_aadt_help": "skip segments below this truck AADT server-side; they cannot inform a truck weight and they dominate the payload",
+      "timeout_seconds": 120
+    },
+
+    "class_shares": {
+      "external_to_internal": 0.35,
+      "internal_to_external": 0.35,
+      "through": 0.3
+    },
+    "cordon": {
+      "min_freespeed_ms": 22.0,
+      "min_capacity_vph": 1500,
+      "min_peripherality": 0.6,
+      "_min_peripherality_help": "1.0 = on the network envelope; 0.4-0.8 is the usable range",
+      "dedupe_radius_m": 1500,
+      "envelope_bins": 36,
+      "envelope_percentile": 99.0,
+      "weight_by": "hpms_truck_aadt",
+      "_weight_by_help": "hpms_truck_aadt | capacity. Observed truck volume where a cordon matched HPMS, capacity elsewhere; 'capacity' ignores observations entirely (ablation control)",
+      "fail_if_none_found": true
+    },
+    "internal_attractor": "freight_employment",
+    "_internal_attractor_help": "employment (all jobs weighted equally) | freight_employment (weighted goods-producing/handling CNS* sectors - a warehouse and an office of equal headcount are no longer equal). Falls back to employment with a warning if the work-location ETL predates the sector columns.",
+    "od_matrix": {
+      "friction": "exponential",
+      "beta": 0.02,
+      "_beta_help": "1/KM, not the QRFM 1/minute - see design.md section 2"
+    },
+
+    "departure_distribution": {
+      "_help": "24 hourly weights each; normalised on load, need not sum to 1",
+      "business_day": null,
+      "through": null
+    },
+
+    "mode": "car",
+    "subpopulation": "freight",
+    "require_events": true,
+    "_require_events_help": "sets writeEventsInterval so tier-2 validation can isolate trucks",
+    "vehicle_mix": {
+      "single_unit": 0.45,
+      "combination": 0.55
+    },
+    "pce": {
+      "enabled": false,
+      "_help": "stage 6: write vehicles.xml and set vehiclesSource. Must be its own run.",
+      "single_unit": 1.5,
+      "combination": 2.5,
+      "car": 1.0
+    }
   }
 }

@@ -31,6 +31,9 @@ data/gtfs
 data/networks
 data/osm_cache
 data/pygris_cache
+# HPMS geometry/truck-share responses, re-fetched on demand and cached for
+# freight.hpms.cache_days. One 15-county bbox is ~17 MB of ArcGIS JSON.
+data/hpms
 
 # Databases — never commit these. They are large and carry real data.
 *.duckdb
@@ -53,3 +56,4 @@ data/_*
 REVIEW_ACTION_ITEMS.txt
 docs/od_matrix/
 docs/freight_night/
+docs/freight

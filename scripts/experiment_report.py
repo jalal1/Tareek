@@ -522,6 +522,199 @@ def _fmt(value: Any, decimals: int = 3) -> str:
     return str(value)
 
 
+#: What a truck model is expected to report, and why each item is here.
+#: Drawn from the sources the freight design already cites: FHWA's *Travel Model
+#: Validation and Reasonableness Checking Manual* (screenlines, %RMSE by volume
+#: group), *Quick Response Freight Methods* (external-station truck models), and
+#: HPMS itself (truck % by functional class is the number DOTs publish).
+FREIGHT_GLOSSARY: List[Tuple[str, str]] = [
+    ("Cordon", "A gateway where a highway crosses the region boundary. Boundary "
+               "truck trips start or end here. Divided highways give two cordons, "
+               "one per direction."),
+    ("E→I / I→E / E→E", "Trip classes: entering and stopping, starting and "
+                        "leaving, and passing straight through."),
+    ("Truck share", "Fraction of traffic that is truck. Resolved per region from "
+                    "HPMS; varies roughly threefold between US regions."),
+    ("Screenline", "The cordons taken together. Compares simulated truck "
+                   "crossings against the volume the cordons were given."),
+]
+
+
+def _freight_section(summary: Dict[str, Any], baseline: Optional[Dict[str, Any]],
+                     mo: Dict[str, Any]) -> List[str]:
+    """Report what the freight module put in and what it did to the network.
+
+    Absent entirely when freight is off, which is the common case — an empty
+    section is worse than no section.
+
+    The split below is deliberate. **Demand** is what we generated and is
+    knowable before MATSim runs; **effect** is what it did once simulated. Only
+    the second is evidence, and conflating the two is how a freight model comes
+    to look validated when only its inputs have been checked.
+    """
+    freight = summary.get("freight")
+    if not freight:
+        return []
+
+    L: List[str] = []
+    L.append("## Freight")
+    L.append("")
+    L.append("Boundary truck trips with at least one end outside the region "
+             "(E→I, I→E, E→E). Internal freight is out of scope.")
+    L.append("")
+
+    # -- what was generated ------------------------------------------------
+    n_trips = freight.get("n_trips") or 0
+    share_pct = freight.get("share_of_all_agents_pct")
+    by_class = freight.get("trips_by_class", {}) or {}
+    bfreight = (baseline["summary"].get("freight", {}) or {}) if baseline else {}
+
+    L.append("### Demand generated")
+    L.append("")
+    L.append("| Measure | Value |" + (" Baseline |" if baseline else ""))
+    L.append("|---|---:|" + ("---:|" if baseline else ""))
+    rows: List[Tuple[str, Any, Any]] = [
+        ("Truck trips", n_trips, bfreight.get("n_trips")),
+        ("Share of all agents (%)", share_pct,
+         bfreight.get("share_of_all_agents_pct")),
+        ("E→I (enter and stop)", by_class.get("external_to_internal"),
+         (bfreight.get("trips_by_class") or {}).get("external_to_internal")),
+        ("I→E (start and leave)", by_class.get("internal_to_external"),
+         (bfreight.get("trips_by_class") or {}).get("internal_to_external")),
+        ("E→E (through)", by_class.get("through"),
+         (bfreight.get("trips_by_class") or {}).get("through")),
+        ("Truck share of traffic (%)", freight.get("truck_share_pct"),
+         bfreight.get("truck_share_pct")),
+        ("demand_scale", freight.get("demand_scale"),
+         bfreight.get("demand_scale")),
+    ]
+    for label, value, bvalue in rows:
+        decimals = 2 if "%" in label else 3
+        line = f"| {label} | {_fmt(value, decimals)} |"
+        if baseline:
+            line += f" {_fmt(bvalue, decimals)} |"
+        L.append(line)
+    L.append("")
+
+    # Provenance matters more than the value: a national-table number is a 1997
+    # average, not a measurement, and must never be read as one.
+    source = freight.get("truck_share_source")
+    if source:
+        note = {
+            "hpms_live": "measured live from HPMS for this region",
+            "hpms_cache": "measured from HPMS, served from cache",
+            "national_table": "**1997 national average — not a measurement for "
+                              "this region**",
+            "config_pinned": "pinned in the config",
+        }.get(source, source)
+        L.append(f"Truck share provenance: `{source}` — {note}.")
+        L.append("")
+
+    # -- gateways ----------------------------------------------------------
+    n_cordons = freight.get("n_cordons")
+    weighting = freight.get("cordon_weighting", {}) or {}
+    by_compass = freight.get("cordons_by_compass", {}) or {}
+    if n_cordons:
+        L.append("### Gateways (cordons)")
+        L.append("")
+        observed = weighting.get("n_observed")
+        fallback = weighting.get("n_fallback")
+        L.append(f"**{n_cordons}** cordons detected from the network.")
+        if observed is not None and fallback is not None:
+            total = observed + fallback
+            pct = (observed / total * 100.0) if total else 0.0
+            L.append("")
+            L.append(f"- **{observed} of {total}** ({pct:.0f}%) weighted by "
+                     f"*observed* HPMS truck AADT")
+            L.append(f"- {fallback} weighted by road capacity where HPMS has no "
+                     f"matching segment — an estimate, not an observation")
+        if by_compass:
+            spread = ", ".join(f"{k} {v}" for k, v in sorted(by_compass.items()))
+            L.append(f"- Spread across the boundary: {spread}")
+        L.append("")
+
+    # -- what it did -------------------------------------------------------
+    # The part that is actually evidence. Everything above is input.
+    effect = freight.get("network_effect") or {}
+    if effect:
+        L.append("### Effect on the network")
+        L.append("")
+        L.append("| Measure | Value |" + (" Baseline |" if baseline else ""))
+        L.append("|---|---:|" + ("---:|" if baseline else ""))
+        beffect = (bfreight.get("network_effect") or {}) if baseline else {}
+        effect_rows: List[Tuple[str, Any, Any]] = [
+            ("Truck share of link entries (%)", effect.get("link_entry_share_pct"),
+             beffect.get("link_entry_share_pct")),
+            ("Truck VMT (miles)", effect.get("vmt_miles"),
+             beffect.get("vmt_miles")),
+            ("Truck share of VMT (%)", effect.get("vmt_share_pct"),
+             beffect.get("vmt_share_pct")),
+            ("Mean truck trip length (km)", effect.get("mean_trip_length_km"),
+             beffect.get("mean_trip_length_km")),
+            ("Screenline ratio (sim/expected)", effect.get("screenline_ratio"),
+             beffect.get("screenline_ratio")),
+            # Tier 2 — the only rows judged against volumes the demand was not
+            # derived from, which is what makes them validation.
+            ("Tier 2: links vs HPMS", effect.get("hpms_n_links"),
+             beffect.get("hpms_n_links")),
+            ("Tier 2: ratio sim/observed", effect.get("hpms_ratio"),
+             beffect.get("hpms_ratio")),
+            ("Tier 2: % links GEH < 5", effect.get("hpms_pct_geh_under_5"),
+             beffect.get("hpms_pct_geh_under_5")),
+        ]
+        effect_rows = [r for r in effect_rows if r[1] is not None]
+        for label, value, bvalue in effect_rows:
+            decimals = 2 if ("%" in label or "km" in label or "ratio" in label) else 1
+            line = f"| {label} | {_fmt(value, decimals)} |"
+            if baseline:
+                line += f" {_fmt(bvalue, decimals)} |"
+            L.append(line)
+        L.append("")
+        L.append("The screenline ratio asks whether the trips we generated "
+                 "reached the cordons they were assigned to. It cannot judge "
+                 "whether the demand *level* is right — its yardstick is the "
+                 "same cordon weighting the demand came from. **Tier 2 can**: "
+                 "it compares per-link truck volumes against HPMS observations "
+                 "on corridors the demand was not derived from.")
+        L.append("")
+        if effect.get("hpms_ratio") is None:
+            L.append("_Tier 2 has not been run for this experiment._ Run "
+                     "`python estimators/freight_estimator.py <region_dir> "
+                     "--experiment-dir <experiment_dir>`.")
+            L.append("")
+    else:
+        L.append("### Effect on the network")
+        L.append("")
+        L.append("_Not measured for this run._ Truck volumes can only be "
+                 "separated from car volumes in the events file, which needs "
+                 "`freight.require_events` and a completed final iteration.")
+        L.append("")
+
+    # -- how to read it ----------------------------------------------------
+    L.append("**Reading this section.** Freight is a single-digit to "
+             "low-double-digit percentage of traffic, so it will not repair a "
+             "large aggregate count error, and this module should not be judged "
+             "on whether total GEH improves. If the aggregate ratio was already "
+             "near 1.0, adding freight pushes it past — that is information "
+             "about car demand, not a freight failure.")
+    L.append("")
+
+    tier1 = freight.get("tier1_passed")
+    failures = freight.get("tier1_failures") or []
+    if tier1 is False and failures:
+        L.append(f"⚠️ **Internal consistency checks failed:** "
+                 f"{', '.join(failures)}. The generated demand does not match "
+                 f"what was configured — see `freight_summary.json`.")
+        L.append("")
+    elif tier1:
+        L.append("Internal consistency checks (trip counts, class split, "
+                 "departure profile, cordon direction): **all passed**.")
+        L.append("")
+
+    L.extend(_glossary_block(FREIGHT_GLOSSARY))
+    return L
+
+
 def build_markdown(run: Dict[str, Any], baseline: Optional[Dict[str, Any]],
                    embed_dir: Optional[Path]) -> str:
     summary, ev, exp_dir = run["summary"], run["evaluation"], run["dir"]
@@ -860,6 +1053,9 @@ def build_markdown(run: Dict[str, Any], baseline: Optional[Dict[str, Any]],
         L.append(line)
     L.append("")
     L.extend(_glossary_block(GLOSSARY))
+
+    # ---- freight -------------------------------------------------------
+    L.extend(_freight_section(summary, baseline, mo))
 
     # ---- configuration -------------------------------------------------
     L.append("## Configuration")

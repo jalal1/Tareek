@@ -4,6 +4,9 @@ Calls sub-estimators in sequence:
   1. demand_estimator  — trip demand, transit config_rate, scaling factors
   2. mode_share_estimator — MATSim scoring + transitRouter params from ACS
      transit share and (optionally) a prior experiment's realised mode shares
+  3. freight_estimator — truck_share and vehicle_mix from HPMS, and (with
+     --experiment-dir) demand_scale from tier-2 corridor validation. Skips
+     itself when freight.enabled is false, which is the common case.
 
 Each sub-estimator writes its own log file under logs/ and updates
 config_estimated.json in the region folder. That JSON is the single source
@@ -23,10 +26,13 @@ Usage:
     python estimators/estimator.py config/USA/TwinCities \
         --experiment-dir E:/jetstream2_experiments/april2026/experiment_20260430_121156
 
-The --experiment-dir flag is forwarded to BOTH sub-estimators:
+The --experiment-dir flag is forwarded to ALL sub-estimators:
   - demand_estimator uses it to load experiment_summary.json and tune demand.
   - mode_share_estimator uses it to load modestats.csv + config.xml and
     apply the clamped log-ratio update toward ACS targets.
+  - freight_estimator uses it to run tier 2 against the events file and derive
+    demand_scale. Without it, freight still estimates truck_share and
+    vehicle_mix from HPMS, which need no experiment.
 """
 
 import argparse
@@ -101,11 +107,19 @@ def main() -> None:
         action="store_true",
         help="Skip mode_share_estimator and run only demand_estimator",
     )
+    parser.add_argument(
+        "--skip-freight",
+        action="store_true",
+        help="Skip freight_estimator. It already no-ops when freight.enabled "
+             "is false; use this to skip it for a freight-enabled region, e.g. "
+             "to avoid the events-file parse on a first feedback run.",
+    )
     args = parser.parse_args()
 
     estimators_dir = Path(__file__).parent
     demand_script     = estimators_dir / "demand_estimator.py"
     mode_share_script = estimators_dir / "mode_share_estimator.py"
+    freight_script    = estimators_dir / "freight_estimator.py"
 
     print("=" * 70)
     print("  ESTIMATOR ORCHESTRATOR")
@@ -158,6 +172,28 @@ def main() -> None:
         results["mode_share_estimator"] = "skipped"
 
     # ------------------------------------------------------------------
+    # 3. Freight estimator
+    #
+    # Runs last so it merges onto an estimated config the other two have
+    # already written. It exits 0 without touching anything when freight is
+    # disabled, so it is safe to run for every region.
+    # ------------------------------------------------------------------
+    if not args.skip_freight:
+        print()
+        print("=" * 70)
+        print("  RUNNING: freight_estimator")
+        print("=" * 70)
+        extra = []
+        if args.experiment_dir:
+            extra += ["--experiment-dir", args.experiment_dir]
+        rc = _run(freight_script, args.config_or_region, extra)
+        results["freight_estimator"] = "OK" if rc == 0 else f"FAILED (exit {rc})"
+        if rc != 0:
+            print(f"\n!! freight_estimator exited with code {rc}")
+    else:
+        results["freight_estimator"] = "skipped"
+
+    # ------------------------------------------------------------------
     # Combined summary
     # ------------------------------------------------------------------
     print()
@@ -178,6 +214,7 @@ def main() -> None:
     print(f"    {estimated}")
     print(f"    logs/demand_estimator_*.log")
     print(f"    logs/mode_share_estimator_*.log")
+    print(f"    logs/freight_estimator_*.log")
     print()
 
     any_failed = any("FAILED" in s for s in results.values())

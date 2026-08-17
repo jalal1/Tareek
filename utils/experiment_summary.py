@@ -631,6 +631,76 @@ def _calculate_runtime_minutes(runtime: Dict, start_key: str, end_key: str) -> O
     return None
 
 
+def _read_freight_summary(experiment_dir: Path) -> Optional[Dict]:
+    """Load freight_summary.json when the run generated freight.
+
+    Returns None when freight was disabled, which is the common case. Never
+    raises: a missing or malformed freight summary must not cost the whole
+    experiment summary.
+    """
+    path = Path(experiment_dir) / 'freight_summary.json'
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except Exception:  # noqa: BLE001 - reporting must not fail a run
+        logger.warning(f"Could not read {path}; freight will be absent from the summary")
+        return None
+
+
+def _freight_headline(freight: Dict, passenger_plans: int) -> Dict:
+    """The freight numbers a reader of the summary needs, without the detail.
+
+    freight_summary.json carries the full picture (per-cordon detail, realised
+    profiles, validation checks). This is the digest that belongs beside the
+    passenger stats, so freight is visible without opening another file.
+    """
+    demand = freight.get('demand', {})
+    truck_share = freight.get('truck_share', {})
+    cordons = freight.get('cordons', {})
+    validation = freight.get('validation', {})
+    n_trips = freight.get('n_trips', 0)
+    total_with_freight = passenger_plans + n_trips
+
+    return {
+        '_comment': 'Boundary freight (E-I, I-E, E-E truck trips). '
+                    'Full detail in freight_summary.json.',
+        'n_trips': n_trips,
+        'share_of_all_agents_pct': (round(n_trips / total_with_freight * 100, 2)
+                                    if total_with_freight else 0.0),
+        'trips_by_class': demand.get('trips_by_class', {}),
+        'demand_source': demand.get('source'),
+        'demand_scale': demand.get('demand_scale'),
+        'crossing_factor': demand.get('crossing_factor'),
+        'crossing_factor_comment': 'trips = crossings / (1 + through_share); '
+                                   'converts cordon crossings into trips',
+        'unscaled_trips': demand.get('unscaled_trips'),
+        'truck_share_pct': (round(truck_share.get('total', 0) * 100, 2)
+                            if truck_share else None),
+        'truck_share_source': truck_share.get('source'),
+        'truck_share_source_comment': 'hpms_live | hpms_cache | national_table | '
+                                      'config_pinned. A national_table result is a '
+                                      '1997 average, NOT a measurement for this region',
+        'vehicle_mix': truck_share.get('mix', {}),
+        'n_cordons': cordons.get('n_cordons'),
+        'cordons_by_compass': cordons.get('by_compass', {}),
+        'cordon_weighting': cordons.get('weighting', {}),
+        'anchoring': cordons.get('anchoring', {}),
+        'tier1_passed': validation.get('passed'),
+        'tier1_failures': [
+            c['name']
+            for c in validation.get('tiers', {}).get('tier1', {}).get('checks', [])
+            if not c.get('passed', True)
+        ],
+        # What freight did to the network, as opposed to what was generated.
+        # Present only when the events file was parsed, because it is the only
+        # output that separates trucks from cars — absent is the honest answer
+        # when nothing measured it.
+        **({'network_effect': freight['network_effect']}
+           if freight.get('network_effect') else {}),
+    }
+
+
 def build_summary(
     experiment_id: str,
     experiment_dir: Path,
@@ -690,6 +760,14 @@ def build_summary(
     for purpose_key in nonwork_purpose_keys:
         plans_dict[purpose_key] = get_plan_count(plan_stats.get(purpose_key))
 
+    # Freight is a third plan stream and has to appear in the breakdown, or the
+    # summary reports fewer plans than MATSim simulated and the difference looks
+    # like a bug. Measured on the first freight run: plans.total said 58,260
+    # while output_persons_count said 63,606 - the 5,346 trucks were invisible.
+    freight_section = _read_freight_summary(experiment_dir)
+    if freight_section:
+        plans_dict['freight'] = freight_section.get('n_trips', 0)
+
     # Aggregate mode_choice stats across purposes (trip-weighted) so the
     # demand estimator can recover empirical chain_reduction on the next run.
     mode_choice_counts: Dict[str, int] = {}
@@ -747,6 +825,9 @@ def build_summary(
                               'Each purpose: non_employees * trip_rate from survey data',
         },
 
+        **({'freight': _freight_headline(freight_section, total_generated)}
+           if freight_section else {}),
+
         'plans': plans_dict,
         'plans_comment': {
             '_comment': 'Plan counts AFTER applying scaling_factor. plans = unscaled_trips * scaling_factor',
@@ -756,6 +837,8 @@ def build_summary(
             'socialrecreation': 'Number of social/recreation plans (non_employees * rate * scaling_factor)',
             'dining': 'Number of dining plans (non_employees * dining_trip_rate * scaling_factor)',
             'other': 'Number of other purpose plans (non_employees * other_trip_rate * scaling_factor)',
+            'freight': 'Number of boundary freight (truck) plans, when freight.enabled. '
+                       'NOT included in total, which covers the passenger streams only',
             'total': 'Sum of all plan counts across all purposes (work + all nonwork)',
             'success_rate': 'Percentage of successfully generated plans: (total / (total + failed)) * 100',
             'chain_retries': 'Total retries due to invalid activity chains (sum of all reasons below)',
