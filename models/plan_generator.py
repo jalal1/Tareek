@@ -70,15 +70,35 @@ class Activity:
 
 
 @dataclass
+class PersonAttribute:
+    """One MATSim person attribute, written as <attribute name= class=>value.
+
+    ``java_class`` is the fully-qualified Java type MATSim uses to parse the
+    text. It is part of the data, not a formatting detail: MATSim reads the
+    class name to pick a converter, so a wrong one is a startup failure rather
+    than a wrong value.
+    """
+    name: str
+    value: str
+    java_class: str = 'java.lang.String'
+
+
+@dataclass
 class Plan:
     """Represents a complete daily plan for one person.
 
     For n activities, there are n-1 legs (trips between activities).
     Each leg has its own mode assignment.
+
+    ``attributes`` carries person-level MATSim attributes (subpopulation,
+    vehicle types). Empty for the passenger streams, which need none; the
+    freight stream sets it. The writer emits them before <plan>, as the
+    population DTD requires: <!ELEMENT person (attributes?,plan*)>.
     """
     person_id: str
     activities: List[Activity] = field(default_factory=list)
     legs: List[Leg] = field(default_factory=list)
+    attributes: List[PersonAttribute] = field(default_factory=list)
 
 
 def _worker_process_chunk(args: Tuple) -> Tuple[List[Plan], Dict]:
@@ -2136,6 +2156,19 @@ class PlanGenerator(_BasePlanGenerator):
 
         for plan in plans:
             person = ET.SubElement(root, 'person', id=plan.person_id)
+
+            # Person attributes must precede <plan>: the population_v6 DTD
+            # declares <!ELEMENT person (attributes?,plan*)>, so a block written
+            # after the plan is a parse error, not a warning.
+            person_attributes = getattr(plan, 'attributes', None)
+            if person_attributes:
+                attrs_elem = ET.SubElement(person, 'attributes')
+                for attribute in person_attributes:
+                    attr_elem = ET.SubElement(
+                        attrs_elem, 'attribute',
+                        {'name': attribute.name, 'class': attribute.java_class})
+                    attr_elem.text = attribute.value
+
             plan_elem = ET.SubElement(person, 'plan', selected="yes")
 
             for i, activity in enumerate(plan.activities):

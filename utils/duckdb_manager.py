@@ -57,8 +57,60 @@ class DBManager:
             )
             try:
                 Base.metadata.create_all(engine)
+                self._add_missing_columns(engine, Base)
             finally:
                 engine.dispose()
+
+    @staticmethod
+    def _add_missing_columns(engine, Base):
+        """Add columns the model declares but an existing table lacks.
+
+        ``create_all`` creates missing *tables* and leaves existing ones
+        untouched, so adding a column to a model breaks every database created
+        before it: SQLAlchemy selects the new column by name and DuckDB raises
+        "Table does not have a column named ...". Since the databases here are
+        rebuildable caches of public data, a full migration framework would be
+        disproportionate — but silently breaking an existing one is worse.
+
+        Only ever *adds* nullable columns. Nothing is dropped, renamed or
+        retyped, so this cannot lose data, and a failure to add one column does
+        not stop the others.
+        """
+        from sqlalchemy import inspect as sa_inspect, text
+
+        inspector = sa_inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+
+        for table_name, table in Base.metadata.tables.items():
+            if table_name not in existing_tables:
+                continue  # create_all just built it, so it is already current
+
+            present = {c['name'] for c in inspector.get_columns(table_name)}
+            for column in table.columns:
+                if column.name in present:
+                    continue
+                if not column.nullable and column.default is None:
+                    # A NOT NULL column with no default cannot be added to a
+                    # table that already has rows. Left for a deliberate
+                    # migration rather than guessing a fill value.
+                    logger.warning(
+                        f"Cannot auto-add non-nullable column "
+                        f"{table_name}.{column.name}; a manual migration is "
+                        f"needed."
+                    )
+                    continue
+                try:
+                    ddl = column.type.compile(engine.dialect)
+                    with engine.begin() as connection:
+                        connection.execute(text(
+                            f'ALTER TABLE "{table_name}" '
+                            f'ADD COLUMN "{column.name}" {ddl}'))
+                    logger.info(
+                        f"Added missing column {table_name}.{column.name} "
+                        f"({ddl}) to the existing database")
+                except Exception as exc:  # noqa: BLE001 - one column, not the run
+                    logger.warning(
+                        f"Could not add column {table_name}.{column.name}: {exc}")
 
     def _make_engine(self, read_only=False):
         """Create a short-lived engine."""

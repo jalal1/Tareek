@@ -295,6 +295,7 @@ class ExperimentRunner:
         'mode_choice',       # mode choice parameters
         'poi_assignment',
         'duration_constraints',
+        'freight',           # boundary truck demand: cordons, volumes, profiles
     )
 
     def _demand_cache_key(self) -> str:
@@ -589,6 +590,12 @@ class ExperimentRunner:
                 f"was done. Fix the configurable_params entry and re-run. "
                 f"Underlying error: {e}"
             ) from e
+
+        # vehicles.xml must exist beside config.xml whenever PCE is on, because
+        # generate_config has just pointed the vehicles module at it. Writing it
+        # here keeps the two in step: neither is written without the other.
+        from models.freight.vehicles import write_vehicles_file
+        write_vehicles_file(self.config, self.experiment_dir / 'vehicles.xml')
 
         # Record the path so it can be used by subsequent steps and the
         # final metadata. Step 5 will overwrite the file with the same
@@ -1288,17 +1295,44 @@ class ExperimentRunner:
                     logger.info("")
 
             # ==================================================================
+            # GENERATE BOUNDARY FREIGHT
+            # ==================================================================
+            # A third stream beside work and non-work: trucks with at least one
+            # end outside the region. Off unless freight.enabled, and a failure
+            # here must not lose the passenger demand that has just been built,
+            # so it is caught rather than raised — except for the cordon gate,
+            # which is deliberately fatal (see models/freight/cordons.py).
+            freight_plans = []
+            if self.config.get('freight', {}).get('enabled', False):
+                from models.freight.plans import generate_freight_plans
+                try:
+                    freight_plans = generate_freight_plans(
+                        self.config,
+                        network_path=self.network_path,
+                        car_trips=len(work_plans) + len(all_nonwork_plans),
+                        summary_path=self.experiment_dir / 'freight_summary.json',
+                    )
+                except Exception as e:
+                    logger.error(f"Freight generation failed: {e}")
+                    logger.error("Continuing with passenger demand only. The run "
+                                 "is valid but carries no boundary freight.")
+                    freight_plans = []
+
+            # ==================================================================
             # COMBINE ALL PLANS
             # ==================================================================
             logger.info("=" * 60)
-            logger.info("COMBINING WORK + NON-WORK PLANS")
+            logger.info("COMBINING WORK + NON-WORK + FREIGHT PLANS")
             logger.info("=" * 60)
 
-            all_plans = work_plans + all_nonwork_plans
+            all_plans = work_plans + all_nonwork_plans + freight_plans
 
             logger.info(f"Plan generation summary (scaling_factor={scaling_factor}):")
             logger.info(f"  Work plans: {len(work_plans):,}")
             logger.info(f"  Non-work plans: {len(all_nonwork_plans):,}")
+            if freight_plans:
+                logger.info(f"  Freight plans: {len(freight_plans):,} "
+                            f"({len(freight_plans) / len(all_plans) * 100:.1f}% of total)")
             logger.info(f"  Combined total (scaled): {len(all_plans):,}")
             if scaling_factor < 1.0:
                 # This represents the full population these scaled plans represent

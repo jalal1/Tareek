@@ -16,6 +16,76 @@ from utils.region_utils import RegionHelper
 logger = setup_logger(__name__)
 
 
+# ── Freight-relevant employment (LODES WAC CNS* sectors) ────────────────────
+#
+# Total employment (C000) is a poor freight attractor: a warehouse and an
+# insurance office of the same headcount generate entirely different truck
+# traffic. LODES publishes employment by NAICS sector in the *same* WAC file
+# as C000 — verified: all 20 CNS columns arrive in the download and were
+# previously discarded.
+#
+# These are the goods-producing and goods-handling sectors, the ones that
+# generate or receive truck trips. Memphis regresses truck trip ends on
+# sector employment and reports R^2 0.77-1.00 (QRFM 3rd ed., pp. 243-248),
+# against total employment which cannot separate the two cases above.
+#
+# Weights are relative truck-trip intensity per job, not headcount shares.
+# Warehousing moves freight by definition and is weighted highest;
+# manufacturing and wholesale are the classic generators; retail receives
+# deliveries; construction draws material trucks to sites. They are
+# deliberately coarse — the point is to separate a distribution centre from an
+# office park, not to model any sector precisely.
+FREIGHT_SECTORS = {
+    'CNS01': ('agriculture', 0.6),
+    'CNS02': ('mining', 0.6),
+    'CNS04': ('utilities', 0.3),
+    'CNS05': ('construction', 0.8),
+    'CNS06': ('manufacturing', 1.0),
+    'CNS07': ('wholesale_trade', 1.0),
+    'CNS08': ('retail_trade', 0.5),
+    'CNS09': ('transport_warehousing', 1.2),
+}
+
+#: Every CNS column LODES publishes, so the ETL can assert the freight subset
+#: is actually present rather than silently summing nothing.
+ALL_CNS_COLUMNS = tuple(f'CNS{i:02d}' for i in range(1, 21))
+
+
+def freight_employment(frame: "pd.DataFrame") -> "pd.Series":
+    """Weighted freight-relevant employment per block.
+
+    Returns a Series aligned to ``frame``. Missing sector columns are treated
+    as zero rather than raising: LODES column sets vary slightly by year and
+    state, and a partial sum is far better than losing the attractor entirely.
+    """
+    total = None
+    present = []
+    for column, (_, weight) in FREIGHT_SECTORS.items():
+        if column not in frame.columns:
+            continue
+        # to_numeric before fillna: an all-null column arrives as object dtype,
+        # where fillna triggers a pandas downcasting FutureWarning. Coercing
+        # first keeps this numeric throughout.
+        values = pd.to_numeric(frame[column], errors='coerce').fillna(0.0) * weight
+        total = values if total is None else total + values
+        present.append(column)
+
+    if total is None:
+        logger.warning(
+            "No CNS sector columns in the LODES download; freight employment "
+            "cannot be computed and freight will fall back to total employment."
+        )
+        return pd.Series(0, index=frame.index, dtype=float)
+
+    missing = sorted(set(FREIGHT_SECTORS) - set(present))
+    if missing:
+        logger.warning(
+            f"LODES download is missing sector columns {missing}; freight "
+            f"employment is a partial sum over {len(present)} sectors."
+        )
+    return total
+
+
 def process_work_locations(config: Dict[str, Any]) -> None:
     """
     Download and process work locations using LODES data via pygris.
@@ -113,12 +183,21 @@ def process_work_locations(config: Dict[str, Any]) -> None:
 
     combined = combined.rename(columns=rename_map)
 
+    # Freight-relevant employment, computed *before* the CNS* columns are
+    # dropped below. They arrive in this same download at no extra cost, and
+    # discarding them was what forced the freight model to use total
+    # employment as its attractor. See FREIGHT_SECTORS.
+    combined['n_employees_freight'] = freight_employment(combined)
+
     # Keep only needed columns
-    work_locs = combined[['geoid', 'n_employees', 'lat', 'lon']].copy()
+    work_locs = combined[['geoid', 'n_employees', 'n_employees_freight',
+                          'lat', 'lon']].copy()
 
     # Convert to appropriate types
     work_locs['geoid'] = work_locs['geoid'].astype(str)
     work_locs['n_employees'] = work_locs['n_employees'].fillna(0).astype(int)
+    work_locs['n_employees_freight'] = (
+        work_locs['n_employees_freight'].fillna(0).round().astype(int))
     work_locs['lat'] = work_locs['lat'].astype(float)
     work_locs['lon'] = work_locs['lon'].astype(float)
 
@@ -253,10 +332,17 @@ def load_work_locations_by_counties(config: Dict[str, Any]) -> Dict[str, Dict[st
             out: Dict[str, Dict[str, Any]] = {}
             for row in results:
                 geoid = str(row.geoid).strip()
+                # n_employees_freight is None for rows written before the
+                # column existed. Left as None rather than coerced to 0 so a
+                # consumer can tell "no freight jobs here" from "this row
+                # predates sector employment" and fall back accordingly.
+                freight_jobs = getattr(row, 'n_employees_freight', None)
                 out[geoid] = {
                     'state_fips': str(row.state_fips),
                     'county_fips': str(row.county_fips),
                     'n_employees': int(row.n_employees) if row.n_employees is not None else 0,
+                    'n_employees_freight': (int(freight_jobs)
+                                            if freight_jobs is not None else None),
                     'lat': float(row.lat) if row.lat is not None else None,
                     'lon': float(row.lon) if row.lon is not None else None
                 }
