@@ -19,9 +19,10 @@ For the full academic treatment including formal equations, experimental results
 7. [Mode Choice](#7-mode-choice)
 8. [MATSim Simulation](#8-matsim-simulation)
 9. [Traffic Counts and Validation](#9-traffic-counts-and-validation)
-10. [Survey Data and Multi-Survey Blending](#10-survey-data-and-multi-survey-blending)
-11. [Scalability](#11-scalability)
-12. [Extending the System](#12-extending-the-system)
+10. [Boundary Freight](#10-boundary-freight)
+11. [Survey Data and Multi-Survey Blending](#11-survey-data-and-multi-survey-blending)
+12. [Scalability](#12-scalability)
+13. [Extending the System](#13-extending-the-system)
 
 ---
 
@@ -267,13 +268,78 @@ The multi-metric evaluator:
 4. Generates per-station validation reports including spatial match maps, 24-hour volume comparison plots, and hourly GEH bar charts.
 5. Records all metrics to a comparison CSV for systematic cross-run analysis.
 
+### Vehicle-Class Metrics
+
+The metrics above are computed on **total link volume**, because no MATSim output reports link volume broken down by vehicle type or subpopulation — `countscompare.txt` and `linkstats.txt.gz` carry totals only, and while `output_trips.csv` does identify persons, it records no link path. When a run includes freight (Section 10), the vehicle streams are separated from the events file and an additional set of metrics is reported — the set that travel-model validation practice expects from a model carrying more than one vehicle class:
+
+| metric | why practice reports it |
+|---|---|
+| **VMT / VKT by vehicle class** | The headline output of regional models and the basis of emissions inventories. FHWA's VMT forecasting method and SCAG's heavy-duty truck model both validate class VMT against HPMS. |
+| **Truck percentage by functional class** | The number HPMS publishes and DOTs quote. Here it also closes a loop: demand is *derived* from a truck share, so the realised share checks derivation against assignment. |
+| **%RMSE by volume group** | The FHWA *Validation and Reasonableness Checking Manual* stratifies error by volume group because a pooled figure hides systematically worse error on low-volume links. Reported against the manual's maximum-desirable targets. |
+| **Screenline / cordon totals** | Practice puts screenline agreement within 5–10%. For a boundary freight model the cordons *are* the screenline, making this the most direct test that the right number of trucks entered the network. |
+| **Trip length distribution by class** | A model can match volumes at every cordon and still distribute trips wrongly inside the region. Only trip length exposes that, and it is the check on the friction parameter. |
+| **Hourly counts and share** | Counts *and* share are reported together deliberately: truck share peaks at night because car volume collapses, not because truck volume rises. Validating on share alone is a known error. |
+
+These live in `models/freight/reporting.py` and are written to `freight_summary.json`.
+
 ### Interpretation
 
 The evaluation is designed to demonstrate the pipeline's ability to produce a calibratable baseline from open data alone, not to claim calibrated accuracy. Demand calibration is inherently iterative and context-dependent. The per-station reports equip practitioners with the diagnostics needed to refine the baseline through parameter adjustments (e.g., increasing the scaling factor or blending local survey data) without modifying code.
 
+Freight is a single-digit to low-double-digit percentage of traffic. It will not repair a large aggregate count error, and the module is not judged on whether total GEH improves — if the aggregate ratio was already near 1.0, adding freight pushes it past, which is information about car demand rather than a freight failure. Freight's contribution is therefore always reported separately from the total.
+
 ---
 
-## 10. Survey Data and Multi-Survey Blending
+## 10. Boundary Freight
+
+An optional module adds truck trips that cross the region boundary, so freeway and highway volumes are not short of the traffic real corridors carry. It is off by default (`freight.enabled`).
+
+### Scope
+
+Only trips with at least one end outside the region: **E→I** (enters and stops), **I→E** (starts and leaves), **E→E** (passes through). Internal freight is out of scope. This is the standard external-model form — FHWA's *Quick Response Freight Methods* documents the Memphis MPO truck model as exactly this split, with the internal truck model kept separate.
+
+This is not a freight research model: no commodities, shipments, tours, or logistics. It produces trips, and MATSim does the rest.
+
+### Where trucks cross — cordon detection
+
+Standard practice places external stations by hand from a map. The module derives them from the network so it works for any region with no manual setup. Two intuitive methods were measured and both fail: severed boundary stubs do not exist in the cleaned network (0 dead-end nodes), and a band around the network's bounding rectangle puts every cordon on one side, because a min/max extent is defined by outlier nodes.
+
+What works is the conjunction of a topological and a geometric test: a corridor link whose upstream node has no other incoming corridor link is a gateway (**terminus**), *and* it must lie near the network's outer envelope in its own direction (**peripherality**), because 60% of raw termini are interior breaks where a capacity filter interrupts a chain mid-region. Cordons are directional — opposite carriageways never merge, or trucks would be injected the wrong way up a divided highway.
+
+### How many — derived per region
+
+Truck share is resolved through four layers, degrading gracefully and never able to fail a run: a pinned config value, an on-disk cache, a live HPMS query, and a vendored national table (FHWA/LTPP) that needs no network at all. Which layer supplied the value is recorded, so a national-average result is never mistaken for a measured one.
+
+This matters because truck share varies by roughly **three times between regions** — measured live: Alabama urban interstate 16.3%, Minnesota 6.2%. A single global default would be wrong nearly everywhere.
+
+Two arithmetic corrections are applied and recorded: crossings are converted to trips by `1 / (1 + through_share)` (0.77 at the default, **not** a flat 0.5, which would be correct only if every trip were a through trip), and freight is scaled by `scaling_factor` like all other demand, since MATSim's `countsScaleFactor` multiplies every simulated vehicle when comparing against counts.
+
+### When — two profiles by trip class
+
+The FHWA/LTPP study identifies two distinct truck patterns, and the distinction maps exactly onto the trip classes. E→I and I→E have a real stop in the region and follow the **business-day** pattern (a broad 09:00–15:00 plateau). E→E is long-haul by definition and follows the **through** pattern, which is nearly flat across the day because long-distance drivers are paid by the mile and travel at night to avoid congestion.
+
+### Integration
+
+Freight becomes a third plan stream beside work and non-work. A freight plan is two activities and one leg, carrying a `subpopulation` person attribute so MATSim applies freight-specific replanning: `ReRoute` plus a selector only. Mode choice and time mutation are deliberately excluded — re-routing around congestion is the reason to simulate trucks, but a truck must not become a pedestrian or drift off its sampled departure time.
+
+Trucks route as `car` and take their physical effect from a vehicle type's passenger-car equivalent (default 2.05 at a 45:55 single-unit/combination mix). PCE is a separate, single-variable change, because it alters congestion and therefore routes and counts on links that carry no trucks at all.
+
+### Validation
+
+Three tiers, described in Section 9: internal consistency (every region, no external data), the HPMS corridor check (any region with Federal-Aid highways), and classification counts where sensors report FHWA vehicle classes.
+
+### Freight Estimation
+
+Tier 2 measures freight parameters from a finished experiment, which is what an estimator does, so it lives in `estimators/freight_estimator.py` alongside the demand and mode-share estimators and follows the same contract: cold start writes `<config_dir>/<stem>_estimated.json`, feedback takes a region folder plus `--experiment-dir` and writes `<region>/config_estimated.json`, and neither ever edits `config.json`.
+
+It is deliberately **not** part of `run_experiment.py`. Isolating the truck stream requires re-reading the MATSim events file (~20 minutes at 15-county scale), which would be a large recurring cost on every simulation run for an answer that is only occasionally needed. Instead the first estimator run extracts a compact artefact, `freight_link_volumes.json`, and later runs read that in milliseconds.
+
+Three parameters have a measured path. `truck_share` and `vehicle_mix` are resolved cold-start from HPMS — the single-unit/combination split measures roughly 28:72 on Alabama urban interstate against a 45:55 default, and the two must be written together because a pinned share is split back out using the mix. `demand_scale` is derived in feedback mode from the tier-2 per-segment ratio. Everything else is left alone for a recorded reason: the distance-decay `beta` is inert at this scale, PCE is never auto-enabled because it gridlocked the fast tier, and the through share cannot be measured from our own output without circularity.
+
+---
+
+## 11. Survey Data and Multi-Survey Blending
 
 ### Supported Surveys
 
@@ -291,7 +357,7 @@ An optional pre-run estimation tool calibrates trip generation and transit mode 
 
 ---
 
-## 11. Scalability
+## 12. Scalability
 
 The system scales along two dimensions:
 
@@ -303,7 +369,7 @@ A population scaling factor (e.g., `scaling_factor=0.1` for a 10% sample) provid
 
 ---
 
-## 12. Extending the System
+## 13. Extending the System
 
 ### 12.1 Adding a New Survey Source
 

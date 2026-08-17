@@ -215,3 +215,87 @@ def test_retired_tolerances_in_config_are_ignored():
     assert "station_daily_geh_max" not in tol
     assert "hourly_spread_max" not in tol
     assert tol["volume_ratio_band"] == 0.15  # live keys still apply
+
+
+# ---------------------------------------------------------------------------
+# freight section
+# ---------------------------------------------------------------------------
+
+def _freight_summary(**overrides):
+    freight = {
+        'n_trips': 18_900,
+        'share_of_all_agents_pct': 4.76,
+        'trips_by_class': {'external_to_internal': 6615,
+                           'internal_to_external': 6615, 'through': 5670},
+        'truck_share_pct': 6.16,
+        'truck_share_source': 'hpms_cache',
+        'demand_scale': 1.0,
+        'n_cordons': 73,
+        'cordon_weighting': {'n_observed': 41, 'n_fallback': 32},
+        'tier1_passed': True,
+        'tier1_failures': [],
+    }
+    freight.update(overrides)
+    return {'freight': freight}
+
+
+@pytest.mark.smoke
+def test_freight_section_absent_when_freight_is_off():
+    """An empty section is worse than no section."""
+    from experiment_report import _freight_section
+    assert _freight_section({}, None, {}) == []
+
+
+@pytest.mark.smoke
+def test_freight_section_reports_cordons_and_demand():
+    from experiment_report import _freight_section
+    text = "\n".join(_freight_section(_freight_summary(), None, {}))
+
+    assert "## Freight" in text
+    assert "18,900" in text          # trips
+    assert "73" in text              # cordons
+    assert "41 of 73" in text        # observed vs fallback split
+
+
+@pytest.mark.smoke
+def test_freight_section_flags_a_national_table_truck_share():
+    """A 1997 national average must never read as a measurement."""
+    from experiment_report import _freight_section
+    summary = _freight_summary(truck_share_source='national_table')
+    text = "\n".join(_freight_section(summary, None, {}))
+
+    assert "not a measurement" in text.lower()
+
+
+@pytest.mark.smoke
+def test_freight_section_says_so_when_effect_was_not_measured():
+    """Without an events file the effect is unknown, not zero."""
+    from experiment_report import _freight_section
+    text = "\n".join(_freight_section(_freight_summary(), None, {}))
+
+    assert "Not measured" in text
+
+
+@pytest.mark.smoke
+def test_freight_section_shows_measured_effect_when_present():
+    from experiment_report import _freight_section
+    summary = _freight_summary(network_effect={
+        'link_entry_share_pct': 4.76, 'vmt_miles': 12_045.3,
+        'vmt_share_pct': 5.9, 'mean_trip_length_km': 28.94,
+        'screenline_ratio': 1.40})
+    text = "\n".join(_freight_section(summary, None, {}))
+
+    assert "Effect on the network" in text
+    assert "4.76" in text
+    assert "Not measured" not in text
+
+
+@pytest.mark.smoke
+def test_freight_section_surfaces_tier1_failures():
+    from experiment_report import _freight_section
+    summary = _freight_summary(tier1_passed=False,
+                               tier1_failures=['cordon_direction_respected'])
+    text = "\n".join(_freight_section(summary, None, {}))
+
+    assert "cordon_direction_respected" in text
+    assert "failed" in text.lower()
