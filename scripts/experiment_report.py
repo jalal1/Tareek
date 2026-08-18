@@ -215,6 +215,19 @@ FIGURE_SECTIONS: List[Tuple[str, str, List[Tuple[str, str]]]] = [
     # network background and never reads the total_volume passed to it. The
     # figure is the road layout and the county boundary — the name and caption
     # promised a heatmap the code was never written to draw.
+    ("Where the Error Sits",
+     "The aggregate ratio and the CV are one number each; this is the "
+     "distribution behind them. It answers the question the scalars cannot: "
+     "whether the model is uniformly off by a factor, which a global lever "
+     "corrects, or whether particular locations are wrong, which one would "
+     "make worse.",
+     [("station_ratio_dotplot.png",
+       "Each count station's simulated volume divided by its observed volume, "
+       "sorted. A single cluster shifted off 1.0 is a level error; two "
+       "separated groups mean specific corridors are wrong. One physical "
+       "sensor reports each direction separately, so a bad location appears "
+       "as two adjacent rows — check whether an outlier is one site or two "
+       "before reading it as a widespread problem.")]),
     ("Error Through the Day",
      "The same two figures MATSim draws from its own counts output, rebuilt "
      "from the run's comparison table. Both are relative error, which is what "

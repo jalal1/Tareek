@@ -4,11 +4,46 @@ Validates all config parameters upfront before starting experiments
 """
 
 import json
+import shutil
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Per-platform install hints for the external binaries the pipeline shells out
+# to. Tareek never installs these itself: they are compiled system packages,
+# the install differs per platform, and on Linux it needs root — so the run
+# stops with the right command for the user's machine instead.
+_INSTALL_HINTS = {
+    'osmium': {
+        'linux': 'sudo apt-get install osmium-tool',
+        'darwin': 'brew install osmium-tool',
+        'win32': 'Download from https://osmcode.org/osmium-tool/ and add it to PATH',
+        'any': 'conda install -c conda-forge osmium-tool',
+        'docs': 'docs/osm-tools-installation.md',
+    },
+    'java': {
+        'linux': 'sudo apt-get install openjdk-21-jre-headless',
+        'darwin': 'brew install openjdk@21',
+        'win32': 'Install a JRE 17+ from https://adoptium.net/ and add it to PATH',
+        'any': 'conda install -c conda-forge openjdk=21',
+        'docs': 'README.md (Prerequisites)',
+    },
+}
+
+
+def _install_hint(tool: str) -> str:
+    """Build a platform-appropriate install message for a missing binary."""
+    hints = _INSTALL_HINTS[tool]
+    platform_hint = hints.get(sys.platform, hints['any'])
+    return (
+        f"'{tool}' was not found on PATH.\n"
+        f"    Install it with:  {platform_hint}\n"
+        f"    Or with conda:    {hints['any']}\n"
+        f"    See {hints['docs']} for details."
+    )
 
 
 class ConfigValidationError(Exception):
@@ -83,8 +118,69 @@ class ConfigValidator:
         # Validate counts configuration
         self._validate_counts_config()
 
+        # Validate the external binaries this config will need
+        self._validate_external_tools()
+
         logger.info("Configuration validation passed")
         return self.config
+
+    def _validate_external_tools(self):
+        """Fail fast when a required external binary is missing.
+
+        Network generation shells out to osmium and MATSim needs a JRE. Both
+        used to surface only once the pipeline reached them — osmium after a
+        ~280 MB Geofabrik download, java after plan generation — so a missing
+        system package wasted minutes of work before reporting itself. Checking
+        here costs nothing and reports before anything is downloaded or built.
+
+        Tareek does not install these: they are compiled system packages whose
+        install differs per platform and needs root on Linux.
+        """
+        required = []
+
+        # osmium is reached whenever a network is generated — either because
+        # rebuild_network forces it, or because no cached network exists yet.
+        # Checking the cache here would duplicate NetworkManager's lookup, so
+        # require osmium unless the run explicitly reuses a cache; a false
+        # positive costs the user one install they will need on the next
+        # uncached region anyway.
+        network_cfg = self.config.get('network', {})
+        matsim_cfg = self.config.get('matsim', {})
+        if network_cfg.get('rebuild_network', False) or not self._has_cached_network():
+            required.append('osmium')
+
+        if matsim_cfg.get('run_simulation', True):
+            required.append('java')
+
+        missing = [t for t in required if shutil.which(t) is None]
+        if missing:
+            raise ConfigValidationError(
+                "Missing required external tool(s):\n\n"
+                + "\n\n".join(f"  {_install_hint(t)}" for t in missing)
+            )
+
+        if required:
+            logger.info(f"External tools found: {', '.join(required)}")
+
+    def _has_cached_network(self) -> bool:
+        """True when the network cache holds at least one entry.
+
+        Deliberately coarse: reproducing NetworkManager's config hash here
+        would duplicate logic that can drift. An empty cache means a network
+        must be built, which is the case that needs osmium. A populated cache
+        that happens to miss *this* region still gets a clear osmium error from
+        the network step itself.
+        """
+        # Mirrors NetworkManager's default: <repo>/data/networks/.
+        metadata = (Path(__file__).parent.parent / 'data' / 'networks'
+                    / 'networks_metadata.json')
+        try:
+            if not metadata.exists():
+                return False
+            with open(metadata) as f:
+                return bool(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            return False
 
     def _validate_required_sections(self):
         """Validate all required sections exist"""

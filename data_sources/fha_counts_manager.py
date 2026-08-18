@@ -17,7 +17,7 @@ from typing import Any, Dict, Set
 
 import pandas as pd
 
-from models.models import FHAStation, FHAHourlyVolume
+from models.models import Base, FHAStation, FHAHourlyVolume
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -42,11 +42,13 @@ OPPOSITE_DIRS = {1: 5, 5: 1, 3: 7, 7: 3, 2: 6, 6: 2, 4: 8, 8: 4}
 
 
 class FHASchemaError(RuntimeError):
-    """Raised when the DB has the old (pre per-direction) FHA schema.
+    """Raised when the FHA tables cannot be brought to the per-direction schema.
 
-    This is a fatal, user-actionable condition (run the migration) — callers
-    must NOT swallow it and continue, or the pipeline would silently run
-    without FHA validation against an incompatible DB.
+    An old-shape DB is upgraded automatically (see
+    FHACountsManager._check_schema), so this now signals that the automatic
+    rebuild itself failed — a fatal, user-actionable condition. Callers must
+    NOT swallow it and continue, or the pipeline would silently run without
+    FHA validation against an incompatible DB.
     """
 
 
@@ -195,22 +197,58 @@ class FHACountsManager:
         return True
 
     def _check_schema(self):
-        """Refuse to run against a pre-per-direction FHA schema.
+        """Bring a pre-per-direction FHA schema up to date, in place.
 
         Older DBs have fha_stations / fha_hourly_volumes without a travel_dir
         column. Inserting per-direction records there would fail or corrupt the
-        data, so we stop early and point to the migration script.
+        data.
+
+        Both tables hold only derived data: every row is re-ingested from the
+        TMAS zip archives in data/FHA_counts on demand, and setup() refills
+        them later in this same call via has_data_for_region(). So the upgrade
+        is a drop + recreate with nothing to preserve, and there is no reason
+        to stop the run and make the user do it by hand — a fresh clone would
+        hit this on its first run against an existing DB.
+
+        scripts/migrate_fha_perdirection.py remains for running the same
+        upgrade standalone; this method is the automatic path.
         """
+        stale = [
+            table for table in ('fha_stations', 'fha_hourly_volumes')
+            if (cols := self.db_manager.get_table_columns(table))
+            and 'travel_dir' not in cols
+        ]
+        if not stale:
+            return
+
+        logger.warning(
+            f"FHA tables {stale} use the old (pre per-direction) schema — "
+            f"missing 'travel_dir'. Rebuilding them empty in the new schema; "
+            f"the counts data re-ingests from the zip archives in this run."
+        )
+        try:
+            self.db_manager.drop_table(FHAHourlyVolume)
+            self.db_manager.drop_table(FHAStation)
+            with self.db_manager.write_engine_scope() as engine:
+                Base.metadata.create_all(engine)
+        except Exception as exc:  # noqa: BLE001 - re-raised as FHASchemaError
+            raise FHASchemaError(
+                f"Could not upgrade the FHA tables to the per-direction schema: "
+                f"{exc}\nRun the migration manually:\n"
+                f"    python scripts/migrate_fha_perdirection.py --config <config.json>"
+            ) from exc
+
+        # Verify rather than assume: a silent failure here would surface later
+        # as a confusing insert error.
         for table in ('fha_stations', 'fha_hourly_volumes'):
             cols = self.db_manager.get_table_columns(table)
-            if cols and 'travel_dir' not in cols:
+            if not cols or 'travel_dir' not in cols:
                 raise FHASchemaError(
-                    f"FHA table '{table}' uses the old (pre per-direction) schema "
-                    f"— missing 'travel_dir'. Run the migration first:\n"
-                    f"    python scripts/migrate_fha_perdirection.py\n"
-                    f"This drops and re-ingests the FHA tables in the new "
-                    f"per-direction format."
+                    f"FHA table '{table}' still lacks 'travel_dir' after the "
+                    f"automatic rebuild. Run the migration manually:\n"
+                    f"    python scripts/migrate_fha_perdirection.py --config <config.json>"
                 )
+        logger.info("FHA tables rebuilt in the per-direction schema.")
 
     def has_data_for_region(self) -> bool:
         """Check if FHA data is already loaded in the DB for the configured region.

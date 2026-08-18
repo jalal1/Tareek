@@ -1055,8 +1055,9 @@ class ExperimentRunner:
                 else:
                     logger.info("FHA counts setup skipped (weight=0)")
             except FHASchemaError:
-                # Incompatible DB schema is fatal and user-actionable: do NOT
-                # continue without FHA data. Re-raise to stop the run.
+                # An old-shape DB upgrades itself in _check_schema; reaching
+                # here means that rebuild failed. Fatal and user-actionable:
+                # do NOT continue without FHA data. Re-raise to stop the run.
                 raise
             except Exception as e:
                 logger.warning(f"FHA counts setup error: {e}")
@@ -1089,7 +1090,8 @@ class ExperimentRunner:
             return counts_path
 
         except FHASchemaError:
-            # Fatal, user-actionable: stop the run so the user migrates the DB.
+            # The automatic per-direction rebuild failed. Fatal and
+            # user-actionable: stop the run so the user migrates the DB.
             raise
         except Exception as e:
             logger.warning(f"Counts generation failed: {e}")
