@@ -774,6 +774,11 @@ class ConfigManager:
             # `_estimator_<leaf>` convention).
             if param_key.startswith('_estimator_') or param_key.startswith('_info'):
                 continue
+            # Skip help/annotation keys written next to a value to document it
+            # for operators. These name no MATSim parameter, so writing them
+            # through would fail the strict template check in update_parameter.
+            if param_key.startswith('_') or param_key.endswith('_help'):
+                continue
             parts = param_key.split('.')
             if parts[0] == 'scoring' and len(parts) >= 4 and parts[1] == 'modeParams':
                 # scoring.modeParams.<mode>.<param>  (param may itself contain dots)

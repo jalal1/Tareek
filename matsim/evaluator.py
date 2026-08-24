@@ -19,6 +19,7 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.lines import Line2D
 import matplotlib.patches as mpatches
 import matplotlib.patheffects as pe
+import matplotlib.ticker as mticker
 import matplotlib.transforms as transforms
 
 from utils.logger import setup_logger
@@ -790,11 +791,28 @@ class SimulationEvaluator:
         # Used by demand_estimator to detect boundary-station outliers that
         # mean_pct_error cannot distinguish from genuine demand under-counting.
         station_ratios = []
+        station_ratio_detail = []
         station_totals = nonzero_obs.groupby('device_id')[['observed', 'simulated']].sum()
         station_totals = station_totals[station_totals['observed'] > 0]
         if len(station_totals) > 0:
             ratios = (station_totals['simulated'] / station_totals['observed']).sort_values()
             station_ratios = ratios.tolist()
+            # Keep the per-station values, not only the summary statistics.
+            # CV and p10/p90 describe the spread of a large sample well, but a
+            # region with a handful of stations IS its distribution: on 8
+            # stations the list shows a bimodal split that a CV of 0.42 cannot
+            # express. The detail also tells the counts-driven calibration path
+            # WHICH stations are wrong, which is what it needs to act on a
+            # corridor error rather than a regional one.
+            station_ratio_detail = [
+                {
+                    'device_id': str(device_id),
+                    'ratio': round(float(ratio), 4),
+                    'observed': round(float(station_totals.at[device_id, 'observed']), 1),
+                    'simulated': round(float(station_totals.at[device_id, 'simulated']), 1),
+                }
+                for device_id, ratio in ratios.items()
+            ]
         # Interquartile mean: drop bottom & top 25% of stations, average the
         # middle 50%. Robust to a few wildly-off boundary stations.
         interquartile_mean_ratio = 0.0
@@ -864,6 +882,15 @@ class SimulationEvaluator:
                 'stations_within_10pct': int(n - over - under),
                 'stations_under_simulated': int(under),
                 'stations_over_simulated_pct': round(over / n * 100, 1),
+                'station_ratios': station_ratio_detail,
+                'station_ratios_comment':
+                    'Per-station sim/obs ratio, one entry per count device, '
+                    'sorted ascending. Volumes are 24-hour totals over hours '
+                    'with an observed count. The summary statistics '
+                    '(station_ratio_cv, p10/p90, iqr_mean) describe this list; '
+                    'on a region with few stations read the list itself, '
+                    'because a handful of values is the distribution rather '
+                    'than a sample of it.',
             }
 
         total_observed = float(comparison_df['observed'].sum())
@@ -1159,6 +1186,155 @@ class SimulationEvaluator:
             plot_path = self.evaluation_dir / 'hourly_relative_error_box.png'
             plt.savefig(plot_path, dpi=200, bbox_inches='tight')
             logger.info(f"Saved hourly relative-error box plot to {plot_path}")
+            plt.close(fig)
+        return fig
+
+    def plot_station_ratio_dotplot(self, comparison_df: pd.DataFrame,
+                                   save: bool = True):
+        """Sorted dot plot of the per-station sim/obs ratio.
+
+        The scalar spread statistics (CV, p10/p90) say how wide the per-station
+        ratios are but not what SHAPE they have, and shape is what decides the
+        fix: one cluster off to one side is a level error a global lever can
+        correct, whereas two separated clusters mean particular corridors are
+        wrong and a global multiplier would inflate the stations that already
+        match.
+
+        A sorted dot plot is the standard view for this (Cleveland dot plot):
+        one row per station, sorted by value, so no binning decision can invent
+        or hide structure. A histogram cannot do the job at either end of the
+        range — with 8 stations there are more bins than points, and with 90 it
+        drops the station identity that makes an outlier actionable.
+
+        The x axis is logarithmic because these are ratios: 0.5x and 2.0x are
+        equally wrong, and a linear axis would make over-simulation look worse
+        than the same factor of under-simulation.
+        """
+        if len(comparison_df) == 0:
+            logger.warning("No comparison data; skipping station ratio dot plot")
+            return None
+
+        nonzero = comparison_df[comparison_df['observed'] > 0]
+        totals = nonzero.groupby('device_id')[['observed', 'simulated']].sum()
+        totals = totals[totals['observed'] > 0]
+        if len(totals) == 0:
+            logger.warning("No stations with observed volume; skipping "
+                           "station ratio dot plot")
+            return None
+
+        # Descending, so the worst over-simulated station is the first row the
+        # eye lands on and the list reads top-to-bottom like a ranking.
+        ratios = (totals['simulated'] / totals['observed']).sort_values(
+            ascending=False)
+        n = len(ratios)
+
+        # Station labels stop being readable long before they stop fitting.
+        # Past this many rows the figure works as a distribution strip, which
+        # is what a large region needs from it anyway.
+        show_labels = n <= 40
+        # Labelled rows need vertical room to stay legible; unlabelled ones are
+        # reading as a distribution curve, and stretching that over a screen and
+        # a half makes the shape harder to see, not easier.
+        height = (max(3.0, 0.30 * n + 1.6) if show_labels
+                  else min(9.0, max(4.5, 0.075 * n + 3.0)))
+        fig, ax = plt.subplots(figsize=(9, height))
+
+        band_lo, band_hi = 0.8, 1.25
+        colors = ['#2C7BB6' if r < band_lo          # under-simulated
+                  else '#D7191C' if r > band_hi      # over-simulated
+                  else '#1A9641'                     # inside the band
+                  for r in ratios]
+
+        y = np.arange(n)
+        # A hairline from the target to each dot turns the row into a deviation
+        # the eye can measure rather than a dot floating in space. Past roughly
+        # 40 rows the lines merge into a grey block that hides the dots, and
+        # the sorted dot sequence already reads as a curve without them.
+        if show_labels:
+            ax.hlines(y, 1.0, ratios.values, color='#CCCCCC', linewidth=1,
+                      zorder=1)
+        marker_size = 46 if show_labels else max(12, 46 - 0.3 * n)
+        ax.scatter(ratios.values, y, c=colors, s=marker_size, zorder=3,
+                   edgecolor='white', linewidth=0.6 if show_labels else 0.3)
+
+        ax.axvspan(band_lo, band_hi, color='#1A9641', alpha=0.08, zorder=0)
+        ax.axvline(1.0, color='#333333', linestyle='--', linewidth=1.2, zorder=2)
+        for edge in (band_lo, band_hi):
+            ax.axvline(edge, color='#1A9641', linestyle=':', linewidth=1, zorder=2)
+
+        ax.set_xscale('log')
+        # Ratio ticks people read as ratios, not as 10^x.
+        ticks = [0.25, 0.5, 0.8, 1.0, 1.25, 2.0, 4.0]
+        lo = min(float(ratios.min()), band_lo) / 1.35
+        hi = max(float(ratios.max()), band_hi) * 1.35
+        ticks = [t for t in ticks if lo <= t <= hi] or [0.5, 1.0, 2.0]
+        ax.set_xlim(lo, hi)
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([f'{t:g}x' for t in ticks])
+        ax.get_xaxis().set_minor_formatter(mticker.NullFormatter())
+
+        if show_labels:
+            ax.set_yticks(y)
+            # One physical sensor reports each direction separately, so a bad
+            # location appears as two rows. Showing the shared station id once
+            # with a direction suffix stops two rows of the same site reading
+            # as two independent failures — which is the difference between one
+            # corridor problem and a region-wide one.
+            labels = []
+            for device_id in ratios.index.astype(str):
+                parts = device_id.rsplit('_', 1)
+                labels.append(f'{parts[0]}  dir {parts[1]}'
+                              if len(parts) == 2 and parts[1].isdigit()
+                              else device_id)
+            ax.set_yticklabels(labels, fontsize=8)
+            # The value beside each dot: reading an exact ratio off a log axis
+            # is guesswork, and these are numbers people quote. The label sits
+            # on the far side of the dot from the 1.0 line, so it never lands
+            # on the connector or the band edges.
+            for yi, r in zip(y, ratios.values):
+                outward = 1 if r >= 1.0 else -1
+                ax.annotate(f'{r:.2f}', (r, yi), textcoords='offset points',
+                            xytext=(10 * outward, 0),
+                            ha='left' if outward > 0 else 'right',
+                            va='center', fontsize=7.5, color='#333333')
+        else:
+            ax.set_yticks([])
+            ax.set_ylabel(f'{n} count stations, sorted', fontsize=9)
+            # Without per-row labels the reader needs the landmarks the summary
+            # statistics quote, or the curve cannot be tied back to the numbers
+            # in the report table.
+            # A median that lands on top of the 1.0 line would draw two
+            # overlapping verticals and two overlapping labels; when they are
+            # that close the median adds nothing the target line does not
+            # already show.
+            median = float(np.median(ratios.values))
+            if abs(np.log(median)) > 0.04:
+                ax.axvline(median, color='#666666', linestyle='-',
+                           linewidth=1.1, zorder=2)
+                ax.annotate(f'median {median:.2f}', (median, n * 0.98),
+                            textcoords='offset points', xytext=(5, 0),
+                            va='top', ha='left', fontsize=8, color='#444444')
+        ax.set_ylim(-1, n)
+
+        ax.set_xlabel('Simulated / observed daily volume  (log scale)')
+        ax.grid(True, axis='x', alpha=0.25, which='major')
+        ax.set_axisbelow(True)
+        for side in ('top', 'right', 'left'):
+            ax.spines[side].set_visible(False)
+
+        inside = int(((ratios >= band_lo) & (ratios <= band_hi)).sum())
+        ax.set_title(
+            f'Per-Station Volume Ratio — {self.experiment_dir.name}\n'
+            f'{inside} of {n} stations within {band_lo:g}-{band_hi:g}x  ·  '
+            f'dashed line = perfect match  ·  '
+            f'blue under-simulated, red over-simulated',
+            fontsize=11)
+
+        plt.tight_layout()
+        if save:
+            plot_path = self.evaluation_dir / 'station_ratio_dotplot.png'
+            plt.savefig(plot_path, dpi=200, bbox_inches='tight')
+            logger.info(f"Saved station ratio dot plot to {plot_path}")
             plt.close(fig)
         return fig
 
@@ -2375,6 +2551,9 @@ class SimulationEvaluator:
         # every run, independent of generate_spatial_maps.
         self.plot_hourly_relative_error_box(comparison_df)
         self.plot_hourly_bias(comparison_df)
+        # Where the per-station error sits. Cheap (no network geometry) and it
+        # is the view that separates a uniform level error from a corridor one.
+        self.plot_station_ratio_dotplot(comparison_df)
 
         hours = self.report_hours()
 
